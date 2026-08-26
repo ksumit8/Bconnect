@@ -211,6 +211,52 @@ void main() {
       tester.widget<TextField>(passwordField).controller?.text,
       'hunter2',
     );
+
+    // Retrying end-to-end: SessionController.joinGroup() tears down the
+    // failed ClientSession before starting the new one, which cancels that
+    // client's subscription to the transport's event stream. That
+    // cancellation's completion is gated on the binding processing a
+    // frame, not on wall-clock time — a bare `Future.delayed` inside
+    // `runAsync` (the pattern `create_group_screen_test.dart` and
+    // `discover_screen_test.dart` use for other async-teardown cases) lets
+    // real time pass without ever pumping a frame, so the cancel's
+    // continuation never runs and the retry hangs indefinitely. Interleave
+    // `tester.pump()` with the real-time delay instead, so each tick both
+    // advances the binding and gives the real event loop a turn. This is
+    // the reference pattern for that combination; reach for it again
+    // anywhere else a retry crosses a second `_teardown()` (Tasks 18/20
+    // are likely candidates).
+    final joinButton = find.widgetWithText(FilledButton, 'Join Group');
+    await tester.runAsync(() async {
+      await tester.tap(joinButton);
+      for (var i = 0; i < 100; i++) {
+        await tester.pump();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        if (container.read(sessionProvider) is SessionConnected) break;
+      }
+      // The session reaching SessionConnected doesn't mean the widget has
+      // finished reacting to it yet (navigating to /group, and the
+      // recentGroupsProvider.record() persist that happens first) — pump a
+      // further bounded run so that trailing work settles too.
+      for (var i = 0; i < 10; i++) {
+        await tester.pump();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    // Reaching /group also unmounts the Discover screen underneath, whose
+    // `discoveredGroupsProvider` stops the still-active scan on dispose;
+    // let that settle on the fake clock too, or a scan-result broadcast
+    // scheduled just before navigation can trip the "no pending timers"
+    // invariant after the test body returns.
+    await pumpBounded(tester);
+
+    final state = container.read(sessionProvider) as SessionConnected;
+    expect(state.groupName, 'Team Alpha');
+    expect(state.isHost, isFalse);
+
+    final recent = container.read(recentGroupsProvider).value;
+    expect(recent, isNotNull);
+    expect(recent!.any((g) => g.name == 'Team Alpha'), isTrue);
   });
 
   joinTest('cancel returns to the group list', (tester) async {
