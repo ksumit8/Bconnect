@@ -57,6 +57,23 @@ class HostSession {
     _groupId = _random.nextInt(0x10000);
     _subscription = _transport.events.listen(_onEvent);
 
+    // Advertise before announcing connected: if the radio can't start
+    // advertising (Bluetooth toggled off mid-creation is a real scenario),
+    // the group must not appear connected with nothing broadcasting it.
+    try {
+      await _transport.startAdvertising(
+        groupName: _config.name,
+        groupId: _groupId,
+        memberCount: 1,
+        isLocked: _config.isLocked,
+        isFull: false,
+      );
+    } catch (_) {
+      await _subscription?.cancel();
+      _subscription = null;
+      rethrow;
+    }
+
     _setState(
       SessionState.connected(
         groupId: _groupId.toRadixString(16).padLeft(4, '0'),
@@ -72,14 +89,6 @@ class HostSession {
           ),
         ],
       ),
-    );
-
-    await _transport.startAdvertising(
-      groupName: _config.name,
-      groupId: _groupId,
-      memberCount: 1,
-      isLocked: _config.isLocked,
-      isFull: false,
     );
   }
 

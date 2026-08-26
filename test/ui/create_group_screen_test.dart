@@ -11,23 +11,50 @@ import 'package:bconnect/state/session_provider.dart';
 import 'package:bconnect/state/transport_provider.dart';
 import 'package:bconnect/transport/fake/fake_hub.dart';
 import 'package:bconnect/transport/fake/fake_transport.dart';
+import 'package:bconnect/transport/group_transport.dart';
+
+/// A transport whose [startAdvertising] always fails, so a test can exercise
+/// what the create screen does when the radio can't start advertising (e.g.
+/// Bluetooth toggled off mid-create) without a real BLE radio.
+class _FailingAdvertiseTransport extends FakeTransport {
+  _FailingAdvertiseTransport(super.hub) : super(deviceId: 'failing-host');
+
+  @override
+  Future<void> startAdvertising({
+    required String groupName,
+    required int groupId,
+    required int memberCount,
+    required bool isLocked,
+    required bool isFull,
+    int rssi = -55,
+  }) {
+    throw const TransportException('advertise failed');
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  late FakeHub hub;
   late FakeTransport transport;
   late ProviderContainer container;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    transport = FakeTransport(FakeHub(), deviceId: 'me');
+    hub = FakeHub();
+    transport = FakeTransport(hub, deviceId: 'me');
   });
 
   tearDown(() async => transport.dispose());
 
-  Future<void> openCreateScreen(WidgetTester tester) async {
+  Future<void> openCreateScreen(
+    WidgetTester tester, {
+    GroupTransport? overrideTransport,
+  }) async {
     container = ProviderContainer(
-      overrides: [transportProvider.overrideWithValue(transport)],
+      overrides: [
+        transportProvider.overrideWithValue(overrideTransport ?? transport),
+      ],
     );
     addTearDown(container.dispose);
 
@@ -53,6 +80,27 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Create Group'));
     await tester.pumpAndSettle();
+  }
+
+  /// Scans on a second transport sharing [hub] with the host, and returns
+  /// whether the discovered group advertises as locked. This is the only
+  /// way to tell a real password group from one that silently dropped its
+  /// lock: `HostSession.start()` reaches `SessionConnected` regardless of
+  /// whether a password was set.
+  Future<bool> scanIsLocked(WidgetTester tester) async {
+    final scanner = FakeTransport(hub, deviceId: 'scanner');
+    addTearDown(scanner.dispose);
+
+    final found = scanner.events.whereType<ScanResultEvent>().first;
+    await scanner.startScan();
+    // FakeHub.deliverCurrentAdverts defers delivery to the next event-loop
+    // turn via a real Timer. Widget tests run on a fake clock that only
+    // fires pending real Timers once it's elapsed by a positive duration —
+    // pump(Duration.zero) (the default) does not do it.
+    await tester.pump(const Duration(milliseconds: 10));
+    final event = await found;
+
+    return event.group.isLocked;
   }
 
   testWidgets('shows the name field and both security options',
@@ -174,6 +222,7 @@ void main() {
 
     expect(state.groupName, 'Team Alpha');
     expect(state.isHost, isTrue);
+    expect(await scanIsLocked(tester), isFalse);
   });
 
   testWidgets('creates a password group', (tester) async {
@@ -192,5 +241,52 @@ void main() {
     await tapCreateButton(tester);
 
     expect(container.read(sessionProvider), isA<SessionConnected>());
+    expect(await scanIsLocked(tester), isTrue);
+  });
+
+  testWidgets(
+      'shows an error and re-enables the button when advertising fails',
+      (tester) async {
+    final failingTransport = _FailingAdvertiseTransport(hub);
+    addTearDown(failingTransport.dispose);
+
+    await openCreateScreen(tester, overrideTransport: failingTransport);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Enter group name'),
+      'Team Alpha',
+    );
+
+    // HostSession.start()'s failure path cancels a stream subscription on
+    // the way out. A StreamController.broadcast() subscription's cancel()
+    // future never resolves under plain pump()/pumpAndSettle() inside
+    // testWidgets — a flutter_test fake-async-zone quirk (confirmed
+    // separately: the identical cancel() resolves in 0ms under a plain
+    // `test()`, so this is a test-harness property, not a production
+    // bug). Run the tap and its async fallout for real via runAsync, then
+    // let the tree settle normally.
+    Future<void> tapAndLetRealAsyncSettle() async {
+      await tester.ensureVisible(
+        find.text('Create Group', skipOffstage: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Create Group'));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+      await tester.pumpAndSettle();
+    }
+
+    await tapAndLetRealAsyncSettle();
+
+    expect(find.text('Could not create the group'), findsOneWidget);
+    expect(container.read(sessionProvider), isA<SessionIdle>());
+
+    // The button must have come back to life rather than staying stuck in
+    // the busy state — tap it again and confirm it still responds.
+    await tapAndLetRealAsyncSettle();
+
+    expect(find.text('Could not create the group'), findsOneWidget);
+    expect(container.read(sessionProvider), isA<SessionIdle>());
   });
 }

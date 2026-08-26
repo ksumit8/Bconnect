@@ -28,6 +28,12 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
   String? _nameError;
   String? _passwordError;
 
+  /// Set when [_create] fails after validation passes — e.g. the radio
+  /// can't start advertising because Bluetooth was toggled off mid-create.
+  /// Distinct from [_nameError]/[_passwordError], which are field-level
+  /// validation and not the group name's or password's fault here.
+  String? _createError;
+
   @override
   void dispose() {
     _name.dispose();
@@ -47,25 +53,44 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
 
     if (_nameError != null || _passwordError != null) return;
 
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _createError = null;
+    });
 
-    final displayName = await ref.read(displayNameProvider.future);
-    await ref.read(sessionProvider.notifier).createGroup(
-          GroupConfig(name: name, password: _locked ? password : null),
-          displayName: displayName,
-        );
+    SessionState? state;
+    var failed = false;
 
-    final state = ref.read(sessionProvider);
-    if (state is SessionConnected) {
-      await ref.read(recentGroupsProvider.notifier).record(
-            groupId: state.groupId,
-            name: state.groupName,
-            memberCount: state.roster.length,
+    try {
+      final displayName = await ref.read(displayNameProvider.future);
+      await ref.read(sessionProvider.notifier).createGroup(
+            GroupConfig(name: name, password: _locked ? password : null),
+            displayName: displayName,
           );
+
+      state = ref.read(sessionProvider);
+      if (state is SessionConnected) {
+        await ref.read(recentGroupsProvider.notifier).record(
+              groupId: state.groupId,
+              name: state.groupName,
+              memberCount: state.roster.length,
+            );
+      }
+    } catch (_) {
+      // Most commonly the radio failing to start advertising (Bluetooth
+      // toggled off mid-create). The session stays idle in that case, so
+      // there is nothing to tear down — just let the user retry.
+      failed = true;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _createError = failed ? 'Could not create the group' : null;
+        });
+      }
     }
 
-    if (!mounted) return;
-    setState(() => _busy = false);
+    if (!mounted || failed) return;
 
     if (state is SessionConnected) context.go('/group');
   }
@@ -137,6 +162,13 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
                 ),
               ),
             ),
+            if (_createError != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _createError!,
+                style: const TextStyle(color: AppColors.danger),
+              ),
+            ],
             const SizedBox(height: 32),
             FilledButton(
               onPressed: _busy ? null : _create,

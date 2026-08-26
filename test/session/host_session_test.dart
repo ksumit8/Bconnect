@@ -15,6 +15,24 @@ import 'package:bconnect/transport/fake/fake_hub.dart';
 import 'package:bconnect/transport/fake/fake_transport.dart';
 import 'package:bconnect/transport/group_transport.dart';
 
+/// A transport whose [startAdvertising] always fails, so tests can exercise
+/// [HostSession.start]'s failure path without a real BLE radio.
+class _FailingAdvertiseTransport extends FakeTransport {
+  _FailingAdvertiseTransport(super.hub) : super(deviceId: 'failing-host');
+
+  @override
+  Future<void> startAdvertising({
+    required String groupName,
+    required int groupId,
+    required int memberCount,
+    required bool isLocked,
+    required bool isFull,
+    int rssi = -55,
+  }) {
+    throw const TransportException('advertise failed');
+  }
+}
+
 void main() {
   late FakeHub hub;
   late FakeTransport hostTransport;
@@ -74,6 +92,27 @@ void main() {
       expect(group.name, 'Team Alpha');
       expect(group.isLocked, isTrue);
       expect(group.memberCount, 1);
+    });
+
+    test(
+        'leaves the session idle and rethrows when advertising fails',
+        () async {
+      final failing = _FailingAdvertiseTransport(hub);
+      addTearDown(failing.dispose);
+
+      session = HostSession(
+        transport: failing,
+        config: const GroupConfig(name: 'Team Alpha'),
+        hostDisplayName: 'You',
+        random: Random(7),
+      );
+
+      await expectLater(
+        session.start(),
+        throwsA(isA<TransportException>()),
+      );
+
+      expect(session.state, isA<SessionIdle>());
     });
   });
 
