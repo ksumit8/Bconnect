@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../models/member.dart';
 import 'control_frame.dart';
+import 'protocol_limits.dart';
 
 class FrameDecodeException implements Exception {
   const FrameDecodeException(this.message);
@@ -11,6 +12,15 @@ class FrameDecodeException implements Exception {
 
   @override
   String toString() => 'FrameDecodeException: $message';
+}
+
+class FrameEncodeException implements Exception {
+  const FrameEncodeException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'FrameEncodeException: $message';
 }
 
 /// Frame type discriminators. Values are part of the wire format and must
@@ -35,6 +45,12 @@ class _Writer {
 
   /// Length-prefixed so the reader never has to guess where a field ends.
   void bytes(Uint8List value) {
+    if (value.length > ProtocolLimits.maxFieldBytes) {
+      throw FrameEncodeException(
+        'field length ${value.length} exceeds the maximum of '
+        '${ProtocolLimits.maxFieldBytes} bytes',
+      );
+    }
     uint8(value.length);
     _out.add(value);
   }
@@ -49,6 +65,12 @@ class _Writer {
   }
 
   void members(List<Member> list) {
+    if (list.length > ProtocolLimits.maxFieldBytes) {
+      throw FrameEncodeException(
+        'member count ${list.length} exceeds the maximum of '
+        '${ProtocolLimits.maxFieldBytes}',
+      );
+    }
     uint8(list.length);
     list.forEach(member);
   }
@@ -62,6 +84,8 @@ class _Reader {
   final Uint8List _data;
   int _offset = 0;
 
+  bool get isExhausted => _offset >= _data.length;
+
   int uint8() {
     if (_offset >= _data.length) {
       throw const FrameDecodeException('unexpected end of frame');
@@ -74,9 +98,7 @@ class _Reader {
     if (_offset + length > _data.length) {
       throw const FrameDecodeException('field length exceeds frame');
     }
-    final value = Uint8List.fromList(
-      _data.sublist(_offset, _offset + length),
-    );
+    final value = Uint8List.fromList(_data.sublist(_offset, _offset + length));
     _offset += length;
     return value;
   }
@@ -122,10 +144,10 @@ abstract final class FrameCodec {
         w.uint8(_FrameType.challenge);
         w.bytes(nonce);
       case JoinRequestFrame(
-          :final version,
-          :final displayName,
-          :final passwordProof
-        ):
+        :final version,
+        :final displayName,
+        :final passwordProof,
+      ):
         w.uint8(_FrameType.joinRequest);
         w.uint8(version);
         w.string(displayName);
@@ -160,42 +182,43 @@ abstract final class FrameCodec {
   static ControlFrame decode(Uint8List data) {
     final r = _Reader(data);
 
-    switch (r.uint8()) {
-      case _FrameType.challenge:
-        return ControlFrame.challenge(nonce: r.bytes());
-      case _FrameType.joinRequest:
-        return ControlFrame.joinRequest(
-          version: r.uint8(),
-          displayName: r.string(),
-          passwordProof: r.bytes(),
-        );
-      case _FrameType.joinAccepted:
-        return ControlFrame.joinAccepted(
-          memberId: r.string(),
-          roster: r.members(),
-        );
-      case _FrameType.joinRejected:
-        final index = r.uint8();
-        if (index >= JoinRejectReason.values.length) {
-          throw const FrameDecodeException('unknown rejection reason');
-        }
-        return ControlFrame.joinRejected(
-          reason: JoinRejectReason.values[index],
-        );
-      case _FrameType.rosterUpdate:
-        return ControlFrame.rosterUpdate(members: r.members());
-      case _FrameType.talkStart:
-        return ControlFrame.talkStart(memberId: r.string());
-      case _FrameType.talkStop:
-        return ControlFrame.talkStop(memberId: r.string());
-      case _FrameType.leave:
-        return const ControlFrame.leave();
-      case _FrameType.ping:
-        return const ControlFrame.ping();
-      case _FrameType.pong:
-        return const ControlFrame.pong();
-      case final unknown:
-        throw FrameDecodeException('unknown frame type $unknown');
+    final frame = switch (r.uint8()) {
+      _FrameType.challenge => ControlFrame.challenge(nonce: r.bytes()),
+      _FrameType.joinRequest => ControlFrame.joinRequest(
+        version: r.uint8(),
+        displayName: r.string(),
+        passwordProof: r.bytes(),
+      ),
+      _FrameType.joinAccepted => ControlFrame.joinAccepted(
+        memberId: r.string(),
+        roster: r.members(),
+      ),
+      _FrameType.joinRejected => _decodeJoinRejected(r),
+      _FrameType.rosterUpdate => ControlFrame.rosterUpdate(
+        members: r.members(),
+      ),
+      _FrameType.talkStart => ControlFrame.talkStart(memberId: r.string()),
+      _FrameType.talkStop => ControlFrame.talkStop(memberId: r.string()),
+      _FrameType.leave => const ControlFrame.leave(),
+      _FrameType.ping => const ControlFrame.ping(),
+      _FrameType.pong => const ControlFrame.pong(),
+      final unknown => throw FrameDecodeException(
+        'unknown frame type $unknown',
+      ),
+    };
+
+    if (!r.isExhausted) {
+      throw const FrameDecodeException('trailing bytes after frame');
     }
+
+    return frame;
+  }
+
+  static ControlFrame _decodeJoinRejected(_Reader r) {
+    final index = r.uint8();
+    if (index >= JoinRejectReason.values.length) {
+      throw const FrameDecodeException('unknown rejection reason');
+    }
+    return ControlFrame.joinRejected(reason: JoinRejectReason.values[index]);
   }
 }

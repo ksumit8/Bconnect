@@ -30,4 +30,12 @@ abstract final class ProtocolLimits {
 
   static const int flagLocked = 0x01;
   static const int flagFull = 0x02;
+
+  /// The largest value a one-byte length prefix can carry in the control
+  /// frame wire format (spec section 5.3).
+  static const int maxFieldBytes = 255;
+
+  /// The UI enforces this in a later task; it belongs with the other wire
+  /// constants. The codec itself does not need to reference it.
+  static const int maxDisplayNameBytes = 63;
 }

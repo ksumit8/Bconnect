@@ -13,7 +13,9 @@ void main() {
 
   test('round-trips a challenge', () {
     expectRoundTrip(
-      ControlFrame.challenge(nonce: Uint8List.fromList(List.generate(16, (i) => i))),
+      ControlFrame.challenge(
+        nonce: Uint8List.fromList(List.generate(16, (i) => i)),
+      ),
     );
   });
 
@@ -114,6 +116,77 @@ void main() {
 
     expect(
       () => FrameCodec.decode(full.sublist(0, full.length - 1)),
+      throwsA(isA<FrameDecodeException>()),
+    );
+  });
+
+  test('round-trips a member with isSelf true', () {
+    expectRoundTrip(
+      ControlFrame.rosterUpdate(
+        members: const [Member(id: 'm1', displayName: 'You', isSelf: true)],
+      ),
+    );
+  });
+
+  test(
+    'throws when decoding a joinRejected with an out-of-range reason index',
+    () {
+      final full = FrameCodec.encode(
+        const ControlFrame.joinRejected(reason: JoinRejectReason.full),
+      );
+      // Overwrite the reason byte (last byte) with an index beyond the enum.
+      final tampered = Uint8List.fromList(full);
+      tampered[tampered.length - 1] = 99;
+
+      expect(
+        () => FrameCodec.decode(tampered),
+        throwsA(isA<FrameDecodeException>()),
+      );
+    },
+  );
+
+  test('throws on invalid UTF-8 rather than an uncaught FormatException', () {
+    // Frame type 6 (talkStart) followed by a length-1 string field
+    // containing an invalid UTF-8 lead byte.
+    final invalid = Uint8List.fromList([6, 1, 0xFF]);
+
+    expect(
+      () => FrameCodec.decode(invalid),
+      throwsA(isA<FrameDecodeException>()),
+    );
+  });
+
+  test('throws when encoding a string field over 255 UTF-8 bytes', () {
+    expect(
+      () => FrameCodec.encode(ControlFrame.talkStart(memberId: 'x' * 300)),
+      throwsA(isA<FrameEncodeException>()),
+    );
+  });
+
+  test('throws when encoding a roster update with more than 255 members', () {
+    final members = List<Member>.generate(
+      256,
+      (i) => Member(id: 'm$i', displayName: 'Device $i'),
+    );
+
+    expect(
+      () => FrameCodec.encode(ControlFrame.rosterUpdate(members: members)),
+      throwsA(isA<FrameEncodeException>()),
+    );
+  });
+
+  test('round-trips a string field of exactly 255 bytes', () {
+    expectRoundTrip(ControlFrame.talkStart(memberId: 'x' * 255));
+  });
+
+  test('throws when decoding a valid frame with extra trailing bytes', () {
+    final full = FrameCodec.encode(
+      const ControlFrame.talkStart(memberId: 'm3'),
+    );
+    final withTrailingByte = Uint8List.fromList([...full, 0]);
+
+    expect(
+      () => FrameCodec.decode(withTrailingByte),
       throwsA(isA<FrameDecodeException>()),
     );
   });
