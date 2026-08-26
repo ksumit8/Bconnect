@@ -173,6 +173,10 @@ void main() {
     final recent = container.read(recentGroupsProvider).value;
     expect(recent, isNotNull);
     expect(recent!.any((g) => g.name == 'Team Alpha'), isTrue);
+
+    // A successful join must also navigate away to /group, or the user
+    // would be stuck looking at a password screen despite being connected.
+    expect(find.byType(JoinPasswordScreen), findsNothing);
   });
 
   joinTest('stays on the screen and explains a wrong password',
@@ -257,6 +261,10 @@ void main() {
     final recent = container.read(recentGroupsProvider).value;
     expect(recent, isNotNull);
     expect(recent!.any((g) => g.name == 'Team Alpha'), isTrue);
+
+    // The retry's success must also navigate away to /group, not just
+    // update provider state while leaving the user stuck on this screen.
+    expect(find.byType(JoinPasswordScreen), findsNothing);
   });
 
   joinTest('cancel returns to the group list', (tester) async {
