@@ -28,7 +28,10 @@ class RecentGroupsController extends AsyncNotifier<List<RecentGroup>> {
     required String name,
     required int memberCount,
   }) async {
-    final current = state.value ?? const <RecentGroup>[];
+    // Await our own build: calling record() before the persisted list has
+    // loaded would otherwise read state.value as null and overwrite the
+    // stored list with just this entry.
+    final current = await future;
 
     final next = <RecentGroup>[
       RecentGroup(

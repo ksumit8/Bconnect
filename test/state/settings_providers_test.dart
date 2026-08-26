@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bconnect/domain/models/audio.dart';
+import 'package:bconnect/domain/models/recent_group.dart';
 import 'package:bconnect/state/audio_route_provider.dart';
 import 'package:bconnect/state/display_name_provider.dart';
 import 'package:bconnect/state/mic_provider.dart';
@@ -169,8 +172,49 @@ void main() {
 
       final groups = container.read(recentGroupsProvider).value!;
 
-      expect(groups.length, 5);
-      expect(groups.first.groupId, 'g6');
+      expect(groups.map((g) => g.groupId).toList(), [
+        'g6',
+        'g5',
+        'g4',
+        'g3',
+        'g2',
+      ]);
+    });
+
+    test('record before the initial load resolves does not clobber '
+        'persisted groups', () async {
+      SharedPreferences.setMockInitialValues({
+        'recent_groups': [
+          jsonEncode(
+            RecentGroup(
+              groupId: 'old',
+              name: 'Old Group',
+              memberCount: 2,
+              lastJoined: now,
+            ).toJson(),
+          ),
+        ],
+      });
+
+      final fresh = ProviderContainer(
+        overrides: [
+          transportProvider.overrideWithValue(transport),
+          clockProvider.overrideWithValue(() => now),
+        ],
+      );
+      addTearDown(fresh.dispose);
+
+      // Deliberately do NOT await recentGroupsProvider.future first: this is
+      // the exact race the fix guards against.
+      await fresh.read(recentGroupsProvider.notifier).record(
+            groupId: 'new',
+            name: 'New Group',
+            memberCount: 1,
+          );
+
+      final groups = await fresh.read(recentGroupsProvider.future);
+
+      expect(groups.map((g) => g.groupId).toList(), ['new', 'old']);
     });
 
     test('survives a reload', () async {
