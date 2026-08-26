@@ -76,6 +76,11 @@ abstract interface class GroupTransport {
     required int memberCount,
     required bool isLocked,
     required bool isFull,
+
+    /// Test-only knob for the fake transport. The real BLE transport
+    /// reports measured RSSI from the radio rather than accepting it as an
+    /// input, so this has no effect there.
+    int rssi = -55,
   });
 
   /// Re-advertises with a changed member count or full flag.

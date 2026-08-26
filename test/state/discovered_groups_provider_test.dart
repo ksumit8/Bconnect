@@ -37,6 +37,7 @@ void main() {
     int groupId = 0x1A2B,
     int memberCount = 1,
     bool isLocked = false,
+    int rssi = -55,
   }) async {
     final host = FakeTransport(hub, deviceId: deviceId);
     addTearDown(host.dispose);
@@ -46,6 +47,7 @@ void main() {
       memberCount: memberCount,
       isLocked: isLocked,
       isFull: false,
+      rssi: rssi,
     );
     return host;
   }
@@ -109,8 +111,13 @@ void main() {
   });
 
   test('lists several groups sorted by descending signal strength', () async {
-    await advertise('host1', 'Team Alpha', groupId: 0x0001);
-    await advertise('host2', 'Project Beta', groupId: 0x0002);
+    // FakeHub previously hardcoded every advert's RSSI to -55, which made
+    // this test unfalsifiable: with equal values, a non-increasing check
+    // holds regardless of whether the provider sorts at all. Give the two
+    // groups clearly different signal strengths so the assertion actually
+    // exercises the sort.
+    await advertise('host1', 'Team Alpha', groupId: 0x0001, rssi: -80);
+    await advertise('host2', 'Project Beta', groupId: 0x0002, rssi: -50);
     final container = makeContainer();
 
     // Same reasoning as "surfaces an advertising group": both scan results
@@ -121,6 +128,10 @@ void main() {
     final groups = container.read(discoveredGroupsProvider).value!;
 
     expect(groups.length, 2);
+    expect(groups.first.name, 'Project Beta');
+    expect(groups.first.rssi, -50);
+    expect(groups.last.name, 'Team Alpha');
+    expect(groups.last.rssi, -80);
     for (var i = 1; i < groups.length; i++) {
       expect(groups[i - 1].rssi, greaterThanOrEqualTo(groups[i].rssi));
     }
@@ -148,15 +159,31 @@ void main() {
 
   test('keeps a group that keeps advertising', () async {
     final host = await advertise('host1', 'Team Alpha');
+    final t0 = now;
     final container = makeContainer();
 
     container.listen(discoveredGroupsProvider, (_, _) {});
     await Future<void>.delayed(Duration.zero);
 
-    now = now.add(ProtocolLimits.advertTtl - const Duration(seconds: 1));
+    // Refresh just before the ORIGINAL advert would expire.
+    now = t0.add(ProtocolLimits.advertTtl - const Duration(seconds: 1));
     await host.updateAdvertisement(memberCount: 2, isFull: false);
     await Future<void>.delayed(Duration.zero);
 
-    expect(container.read(discoveredGroupsProvider).value!.length, 1);
+    // Now advance past the point the original (unrefreshed) advert's TTL
+    // would have expired, but still within the TTL of the refresh above. A
+    // regression that stopped resetting `lastSeen` on repeat adverts would
+    // still pass a check made only up to `advertTtl - 1s` from t0 (the
+    // previous version of this test) — go further to actually prove the
+    // refresh extended the group's life. Trigger a second advertiser so the
+    // list recomputes, exactly as in the TTL-expiry test above.
+    now = now.add(const Duration(seconds: 2));
+    expect(now.isAfter(t0.add(ProtocolLimits.advertTtl)), isTrue);
+    await advertise('host2', 'Project Beta', groupId: 0x0002);
+    await Future<void>.delayed(Duration.zero);
+
+    final groups = container.read(discoveredGroupsProvider).value!;
+    expect(groups.length, 2);
+    expect(groups.map((g) => g.name), contains('Team Alpha'));
   });
 }

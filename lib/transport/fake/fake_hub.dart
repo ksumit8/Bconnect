@@ -6,10 +6,11 @@ import '../group_transport.dart';
 import 'fake_transport.dart';
 
 class _Advert {
-  const _Advert(this.name, this.payload);
+  const _Advert(this.name, this.payload, this.rssi);
 
   final String name;
   final AdvertPayload payload;
+  final int rssi;
 }
 
 class _Connection {
@@ -50,8 +51,13 @@ class FakeHub {
     }
   }
 
-  void advertise(String deviceId, String name, AdvertPayload payload) {
-    _adverts[deviceId] = _Advert(name, payload);
+  void advertise(
+    String deviceId,
+    String name,
+    AdvertPayload payload, {
+    int rssi = -55,
+  }) {
+    _adverts[deviceId] = _Advert(name, payload, rssi);
     _broadcastScanResult(deviceId);
   }
 
@@ -89,7 +95,7 @@ class FakeHub {
       memberCount: advert.payload.memberCount,
       isLocked: advert.payload.isLocked,
       isFull: advert.payload.isFull,
-      rssi: -55,
+      rssi: advert.rssi,
       lastSeen: _clock(),
     );
   }

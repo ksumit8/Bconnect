@@ -31,6 +31,7 @@ class FakeTransport implements GroupTransport {
 
   String? _advertisedName;
   AdvertPayload? _advertisedPayload;
+  int _advertisedRssi = -55;
 
   /// Visible to [FakeHub]; not part of [GroupTransport].
   void emit(TransportEvent event) {
@@ -50,6 +51,7 @@ class FakeTransport implements GroupTransport {
     required int memberCount,
     required bool isLocked,
     required bool isFull,
+    int rssi = -55,
   }) async {
     // Validates the name against the scan-response budget, exactly as the
     // real transport will (spec section 5.1).
@@ -62,8 +64,9 @@ class FakeTransport implements GroupTransport {
       isLocked: isLocked,
       isFull: isFull,
     );
+    _advertisedRssi = rssi;
 
-    _hub.advertise(deviceId, groupName, _advertisedPayload!);
+    _hub.advertise(deviceId, groupName, _advertisedPayload!, rssi: rssi);
   }
 
   @override
@@ -83,7 +86,12 @@ class FakeTransport implements GroupTransport {
       isFull: isFull,
     );
 
-    _hub.advertise(deviceId, _advertisedName!, _advertisedPayload!);
+    _hub.advertise(
+      deviceId,
+      _advertisedName!,
+      _advertisedPayload!,
+      rssi: _advertisedRssi,
+    );
   }
 
   @override
