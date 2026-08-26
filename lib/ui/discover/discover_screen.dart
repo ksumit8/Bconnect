@@ -9,7 +9,16 @@ import '../../state/discovered_groups_provider.dart';
 import '../../state/display_name_provider.dart';
 import '../../state/recent_groups_provider.dart';
 import '../../state/session_provider.dart';
+import '../../transport/group_transport.dart';
 import 'widgets/group_tile.dart';
+
+/// Maps a failed join to copy a user can act on (spec section 8).
+String _errorMessage(SessionError error) => switch (error) {
+      SessionError.groupFull => 'That group is full',
+      SessionError.wrongPassword => 'Incorrect password',
+      SessionError.incompatibleVersion => 'Incompatible app version',
+      _ => 'Could not join the group',
+    };
 
 class DiscoverScreen extends ConsumerWidget {
   const DiscoverScreen({super.key});
@@ -25,19 +34,51 @@ class DiscoverScreen extends ConsumerWidget {
     }
 
     final displayName = await ref.read(displayNameProvider.future);
-    await ref
-        .read(sessionProvider.notifier)
-        .joinGroup(group, displayName: displayName);
+    if (!context.mounted) return;
+
+    // `ClientSession.join` resolves to `SessionFailed` rather than throwing
+    // for protocol-level rejections (wrong password, full, incompatible
+    // version, connection lost); this try/catch only guards the genuinely-
+    // throwing case, e.g. a `TransportException` surfacing some other way.
+    try {
+      await ref
+          .read(sessionProvider.notifier)
+          .joinGroup(group, displayName: displayName);
+    } on TransportException {
+      if (!context.mounted) return;
+      ref.read(sessionProvider.notifier).reset();
+      _showError(context, 'Could not join the group');
+      return;
+    }
+
+    // Backing out of this screen while the handshake is in flight unmounts
+    // the widget and disposes `discoveredGroupsProvider`; guard before
+    // touching `ref` again so that doesn't throw a `StateError`.
+    if (!context.mounted) return;
 
     final state = ref.read(sessionProvider);
-    if (state is SessionConnected) {
-      await ref.read(recentGroupsProvider.notifier).record(
-            groupId: state.groupId,
-            name: state.groupName,
-            memberCount: state.roster.length,
-          );
-      if (context.mounted) context.go('/group');
+    switch (state) {
+      case SessionConnected():
+        await ref.read(recentGroupsProvider.notifier).record(
+              groupId: state.groupId,
+              name: state.groupName,
+              memberCount: state.roster.length,
+            );
+        if (context.mounted) context.go('/group');
+      case SessionFailed(:final error):
+        ref.read(sessionProvider.notifier).reset();
+        _showError(context, _errorMessage(error));
+      case SessionIdle():
+      case SessionDiscovering():
+      case SessionJoining():
+        break;
     }
+  }
+
+  void _showError(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
