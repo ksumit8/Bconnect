@@ -17,23 +17,29 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     transport = FakeTransport(FakeHub(), deviceId: 'me');
-    // appRouter is a process-wide singleton (by design: app.dart hands it to
-    // MaterialApp.router once). Tests in this file each pump a fresh
-    // BconnectApp but share that one GoRouter, so a push() in an earlier
-    // test would otherwise leak into the next test's initial route.
-    appRouter.go('/');
   });
 
   tearDown(() async => transport.dispose());
 
-  Future<void> pumpApp(WidgetTester tester, {bool peripheral = true}) async {
+  Future<void> pumpApp(
+    WidgetTester tester, {
+    bool peripheral = true,
+    Object? peripheralError,
+  }) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           transportProvider.overrideWithValue(transport),
-          peripheralSupportedProvider.overrideWith((ref) async => peripheral),
+          peripheralSupportedProvider.overrideWith((ref) async {
+            if (peripheralError != null) throw peripheralError;
+            return peripheral;
+          }),
         ],
-        child: const BconnectApp(),
+        // A fresh router per test: appRouter is a process-wide singleton
+        // that remembers its current location across pumpWidget calls in
+        // the same test file, so reusing it here would leak navigation
+        // from one test into the next.
+        child: BconnectApp(router: buildAppRouter()),
       ),
     );
     await tester.pumpAndSettle();
@@ -103,6 +109,23 @@ void main() {
   testWidgets('disables Create New Group without peripheral support',
       (tester) async {
     await pumpApp(tester, peripheral: false);
+
+    expect(
+      find.text("This device can't host a group"),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Create New Group'));
+    await tester.pumpAndSettle();
+
+    // Still on home: the tap did nothing, so the shell is still visible.
+    expect(find.byType(NavigationBar), findsOneWidget);
+  });
+
+  testWidgets(
+      'disables Create New Group when the peripheral probe fails',
+      (tester) async {
+    await pumpApp(tester, peripheralError: Exception('probe failed'));
 
     expect(
       find.text("This device can't host a group"),

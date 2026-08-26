@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bconnect/app.dart';
+import 'package:bconnect/core/router/app_router.dart';
 import 'package:bconnect/state/transport_provider.dart';
 import 'package:bconnect/transport/fake/fake_hub.dart';
 import 'package:bconnect/transport/fake/fake_transport.dart';
@@ -19,7 +20,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [transportProvider.overrideWithValue(transport)],
-        child: const BconnectApp(),
+        child: BconnectApp(router: buildAppRouter()),
       ),
     );
     await tester.pumpAndSettle();

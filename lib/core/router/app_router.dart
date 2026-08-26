@@ -3,38 +3,50 @@ import 'package:go_router/go_router.dart';
 
 import '../../ui/home/home_shell.dart';
 
-final appRouter = GoRouter(
-  routes: [
-    GoRoute(
-      path: '/',
-      builder: (context, state) => const HomeShell(),
+/// Builds a fresh router with a clean navigation stack.
+///
+/// `appRouter` below is the single production instance, shared by the whole
+/// app for its lifetime. Widget tests should call this instead of reusing
+/// `appRouter`: `GoRouter` is stateful (it remembers the current location
+/// across `pumpWidget` calls), so sharing one instance across tests in the
+/// same file lets an earlier test's navigation leak into the next test's
+/// initial route.
+GoRouter buildAppRouter() => GoRouter(
       routes: [
         GoRoute(
-          path: 'create',
-          builder: (context, state) => const _Pending('Create New Group'),
-        ),
-        GoRoute(
-          path: 'discover',
-          builder: (context, state) => const _Pending('Join Group'),
-        ),
-        GoRoute(
-          path: 'join',
-          builder: (context, state) => const _Pending('Join Group'),
-        ),
-        GoRoute(
-          path: 'group',
-          builder: (context, state) => const _Pending('Group'),
+          path: '/',
+          builder: (context, state) => const HomeShell(),
           routes: [
             GoRoute(
-              path: 'audio',
-              builder: (context, state) => const _Pending('Audio Output'),
+              path: 'create',
+              builder: (context, state) =>
+                  const _Pending('Create New Group'),
+            ),
+            GoRoute(
+              path: 'discover',
+              builder: (context, state) => const _Pending('Join Group'),
+            ),
+            GoRoute(
+              path: 'join',
+              builder: (context, state) => const _Pending('Join Group'),
+            ),
+            GoRoute(
+              path: 'group',
+              builder: (context, state) => const _Pending('Group'),
+              routes: [
+                GoRoute(
+                  path: 'audio',
+                  builder: (context, state) =>
+                      const _Pending('Audio Output'),
+                ),
+              ],
             ),
           ],
         ),
       ],
-    ),
-  ],
-);
+    );
+
+final appRouter = buildAppRouter();
 
 /// Replaced task by task as each screen lands.
 class _Pending extends StatelessWidget {

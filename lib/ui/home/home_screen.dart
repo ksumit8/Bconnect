@@ -13,9 +13,16 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // A device that cannot advertise can still join, so only hosting is
-    // disabled (spec section 8).
-    final canHost =
-        ref.watch(peripheralSupportedProvider).value ?? true;
+    // disabled (spec section 8). A failed probe must fail closed (treat as
+    // unsupported) rather than default to true, or a broken Bluetooth stack
+    // would let the user start creating a group only to fail partway
+    // through. Loading is treated as optimistic so the card doesn't flicker
+    // disabled on every launch while the probe is still in flight.
+    final canHost = ref.watch(peripheralSupportedProvider).when(
+          data: (supported) => supported,
+          loading: () => true,
+          error: (_, _) => false,
+        );
     final recents = ref.watch(recentGroupsProvider);
 
     return SafeArea(

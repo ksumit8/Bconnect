@@ -21,6 +21,17 @@ final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 /// False disables hosting but not joining (spec section 8). It is a real
 /// limitation on some Android chipsets, so it must fail visibly on the home
 /// screen rather than midway through creating a group.
+///
+/// `retry: null` (via a function that always returns null) opts out of
+/// Riverpod's default automatic retry. This is a one-shot capability query,
+/// not a flaky operation, so retrying it is meaningless; worse, while a
+/// retry is pending the provider reports `AsyncLoading` with the error
+/// merely attached rather than a stable `AsyncError` (isLoading stays true
+/// for up to ~30s of cumulative backoff across the default 10 retries).
+/// Consumers that treat "loading" as optimistically true would then show
+/// hosting as available for that whole window despite the probe having
+/// already failed.
 final peripheralSupportedProvider = FutureProvider<bool>(
   (ref) => ref.watch(transportProvider).isPeripheralSupported(),
+  retry: (retryCount, error) => null,
 );
