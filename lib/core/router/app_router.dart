@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../domain/models/discovered_group.dart';
 import '../../ui/create/create_group_screen.dart';
 import '../../ui/discover/discover_screen.dart';
+import '../../ui/group/group_screen.dart';
 import '../../ui/home/home_shell.dart';
 import '../../ui/join/join_password_screen.dart';
 
@@ -37,7 +38,7 @@ GoRouter buildAppRouter() => GoRouter(
             ),
             GoRoute(
               path: 'group',
-              builder: (context, state) => const _Pending('Group'),
+              builder: (context, state) => const GroupScreen(),
               routes: [
                 GoRoute(
                   path: 'audio',
