@@ -401,6 +401,76 @@ void main() {
       expect(hostTransport.isTalking, isFalse);
     });
 
+    test(
+        'refuses a remote talk request over the cap and tells the requester '
+        'to stand down', () async {
+      await build().start();
+
+      // Fill every talk slot with joined, currently-talking members.
+      final extras = <FakeTransport>[];
+      for (var i = 0; i < ProtocolLimits.maxConcurrentTalkers; i++) {
+        final t = FakeTransport(hub, deviceId: 'talker$i');
+        extras.add(t);
+        final frames =
+            t.events.whereType<ControlMessageEvent>().map((e) => FrameCodec.decode(e.bytes));
+        final accepted = frames.whereType<JoinAcceptedFrame>().first;
+        final peerId = await t.connect('host');
+        await t.sendControl(
+          peerId,
+          FrameCodec.encode(ControlFrame.joinRequest(
+            version: ProtocolLimits.protocolVersion,
+            displayName: 'Talker $i',
+            passwordProof: Uint8List(0),
+          )),
+        );
+        final memberId = (await accepted).memberId;
+        await t.sendControl(
+          peerId,
+          FrameCodec.encode(ControlFrame.talkStart(memberId: memberId)),
+        );
+      }
+      addTearDown(() async {
+        for (final t in extras) {
+          await t.dispose();
+        }
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      // Join one more peer normally, over its own raw transport, so it has
+      // no ClientSession local gate to short-circuit its own request.
+      final requesterFrames = clientFrames();
+      final challenge = requesterFrames.first; // subscribe before connecting.
+      final peerId = await clientTransport.connect('host');
+      await challenge;
+      final accepted = requesterFrames.whereType<JoinAcceptedFrame>().first;
+      await sendToHost(
+        peerId,
+        ControlFrame.joinRequest(
+          version: ProtocolLimits.protocolVersion,
+          displayName: 'One Too Many',
+          passwordProof: Uint8List(0),
+        ),
+      );
+      final memberId = (await accepted).memberId;
+
+      // Subscribe to the stand-down reply before sending the raw request
+      // that should trigger it — this is the host's own authoritative cap
+      // check (spec section 5.4), reached only when a raw TalkStartFrame
+      // arrives without going through ClientSession.requestTalk()'s local
+      // gate.
+      final stoodDown = requesterFrames.whereType<TalkStopFrame>().first;
+      await sendToHost(peerId, ControlFrame.talkStart(memberId: memberId));
+
+      expect((await stoodDown).memberId, memberId);
+      expect(
+        (session.state as SessionConnected)
+            .roster
+            .firstWhere((m) => m.id == memberId)
+            .isTalking,
+        isFalse,
+      );
+    });
+
     test('stopTalk clears the talking flag', () async {
       await build().start();
       await session.requestTalk();
