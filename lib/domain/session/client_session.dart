@@ -37,6 +37,14 @@ class ClientSession {
   /// reported as hostLeft rather than connectionLost.
   bool _hostEnded = false;
 
+  /// Set for the duration of a voluntary [leave]. The disconnect this
+  /// triggers can arrive either as the direct result of our own
+  /// `_transport.disconnect()` call, or as the host's own disconnect once it
+  /// processes our `LeaveFrame` — the two race, and either can reach
+  /// `_onDisconnected` before `leave()` finishes. Either way it must be
+  /// reported as a clean return to idle, never as SessionFailed.
+  bool _leaving = false;
+
   SessionState get state => _state;
   Stream<SessionState> get states => _states.stream;
 
@@ -45,6 +53,7 @@ class ClientSession {
     _password = password;
     _myMemberId = null;
     _hostEnded = false;
+    _leaving = false;
 
     _subscription ??= _transport.events.listen(_onEvent);
     _setState(SessionState.joining(group: group, step: JoinStep.connecting));
@@ -62,10 +71,21 @@ class ClientSession {
   }
 
   Future<void> leave() async {
+    // Set before any await: once we start leaving, any disconnect that
+    // results — ours or the host's — must resolve to idle, never to
+    // SessionFailed. See the field doc on [_leaving] for why this can't be
+    // done by nulling _peerId alone.
+    _leaving = true;
+
     final peerId = _peerId;
     if (peerId != null) {
       await _send(const ControlFrame.leave());
       await _transport.stopTalking();
+
+      // Null the peer id before disconnecting: FakeHub (and the real radio)
+      // deliver PeerDisconnectedEvent asynchronously, so by the time it
+      // arrives _onEvent's `peerId == _peerId` guard should already fail.
+      _peerId = null;
       try {
         await _transport.disconnect(peerId);
       } on TransportException {
@@ -73,7 +93,6 @@ class ClientSession {
       }
     }
 
-    _peerId = null;
     _myMemberId = null;
     _setState(const SessionState.idle());
   }
@@ -128,7 +147,7 @@ class ClientSession {
     try {
       frame = FrameCodec.decode(bytes);
     } on FrameDecodeException {
-      return;
+      return; // Ignore malformed traffic rather than tearing down the session.
     }
 
     switch (frame) {
@@ -144,6 +163,14 @@ class ClientSession {
         _setTalking(memberId, true);
       case TalkStopFrame(:final memberId):
         _setTalking(memberId, false);
+        if (memberId == _myMemberId) {
+          // The host is revoking our floor: it replies with TalkStop
+          // addressed to us when our request loses a race against the
+          // concurrent-talker cap (spec section 5.4). Our own roster check
+          // in requestTalk() can be stale, so this is the only signal that
+          // stops the mic in that case.
+          await _transport.stopTalking();
+        }
       case LeaveFrame():
         // The host ended the group.
         _hostEnded = true;
@@ -214,7 +241,7 @@ class ClientSession {
   void _onDisconnected() {
     _peerId = null;
 
-    if (_hostEnded || _state is SessionFailed) return;
+    if (_hostEnded || _leaving || _state is SessionFailed) return;
     if (_state is SessionIdle) return;
 
     _setState(const SessionState.failed(error: SessionError.connectionLost));

@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:bconnect/domain/models/discovered_group.dart';
 import 'package:bconnect/domain/models/group_config.dart';
 import 'package:bconnect/domain/models/session_state.dart';
+import 'package:bconnect/domain/protocol/control_frame.dart';
+import 'package:bconnect/domain/protocol/frame_codec.dart';
 import 'package:bconnect/domain/session/client_session.dart';
 import 'package:bconnect/domain/session/host_session.dart';
 import 'package:bconnect/transport/fake/fake_hub.dart';
@@ -233,6 +235,40 @@ void main() {
     test('refuses to talk when not connected', () async {
       expect(await client.requestTalk(), isFalse);
     });
+
+    test('a host-revoked talk stop halts the local transport', () async {
+      await startHost();
+      final group = await discover();
+
+      final peerIdFuture =
+          hostTransport.events.whereType<PeerConnectedEvent>().first;
+      final connected = connectedState();
+      await client.join(group);
+      await connected;
+
+      final peerId = (await peerIdFuture).peerId;
+
+      expect(await client.requestTalk(), isTrue);
+      expect(clientTransport.isTalking, isTrue);
+
+      // Simulate the host revoking the floor, exactly as
+      // HostSession._onRemoteTalk does when a talk request loses the race
+      // against the concurrent-talker cap (spec section 5.4): it replies
+      // directly to the requester with a TalkStop naming that requester's
+      // own member id.
+      await hostTransport.sendControl(
+        peerId,
+        FrameCodec.encode(const ControlFrame.talkStop(memberId: 'm2')),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final state = client.state as SessionConnected;
+      expect(
+        state.roster.firstWhere((m) => m.id == 'm2').isTalking,
+        isFalse,
+      );
+      expect(clientTransport.isTalking, isFalse);
+    });
   });
 
   group('teardown', () {
@@ -250,6 +286,25 @@ void main() {
 
       expect(client.state, isA<SessionIdle>());
       expect((host.state as SessionConnected).roster.length, 1);
+    });
+
+    test('leave never emits a failure state', () async {
+      await startHost();
+      final group = await discover();
+
+      final connected = connectedState();
+      await client.join(group);
+      await connected;
+
+      final states = <SessionState>[];
+      final sub = client.states.listen(states.add);
+
+      await client.leave();
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      expect(states, isNot(contains(isA<SessionFailed>())));
+      expect(states.last, isA<SessionIdle>());
     });
 
     test('fails with hostLeft when the host ends the group', () async {
