@@ -45,6 +45,17 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// The Discover screen (reached via "Join Existing Group") keeps a
+  /// perpetual scanning spinner and a 1-second prune timer running for as
+  /// long as it's mounted, so `pumpAndSettle()` never converges while it's
+  /// on screen — see `test/ui/discover_screen_test.dart` for the full
+  /// story. Pump a bounded, fixed number of frames instead.
+  Future<void> pumpBounded(WidgetTester tester, {int times = 30}) async {
+    for (var i = 0; i < times; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+  }
+
   testWidgets('shows the app title and both action cards', (tester) async {
     await pumpApp(tester);
 
@@ -78,10 +89,16 @@ void main() {
     await pumpApp(tester);
 
     await tester.tap(find.text('Join Existing Group'));
-    await tester.pumpAndSettle();
+    await pumpBounded(tester);
 
     expect(find.text('Join Group'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
+
+    // Navigate back so the Discover screen's scan timer is cancelled
+    // before the test ends, rather than tripping flutter_test's "no
+    // pending timers" invariant check.
+    await tester.pageBack();
+    await pumpBounded(tester);
   });
 
   testWidgets('says the list is empty when there are no recent groups',
