@@ -69,9 +69,8 @@ void main() {
     await tester.tap(find.text('Create New Group'));
     await tester.pumpAndSettle();
 
-    // The pushed route covers the shell, so the bottom bar is gone.
+    expect(find.text('Group Name'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
-    expect(find.byType(BackButton), findsOneWidget);
   });
 
   testWidgets('tapping Join Existing Group opens the discover route',

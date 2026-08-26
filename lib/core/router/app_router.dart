@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../ui/create/create_group_screen.dart';
 import '../../ui/home/home_shell.dart';
 
 /// Builds a fresh router with a clean navigation stack.
@@ -19,8 +20,7 @@ GoRouter buildAppRouter() => GoRouter(
           routes: [
             GoRoute(
               path: 'create',
-              builder: (context, state) =>
-                  const _Pending('Create New Group'),
+              builder: (context, state) => const CreateGroupScreen(),
             ),
             GoRoute(
               path: 'discover',
