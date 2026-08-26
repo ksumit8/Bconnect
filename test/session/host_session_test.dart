@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -238,6 +239,46 @@ void main() {
 
       expect((await rejected).reason, JoinRejectReason.full);
     });
+
+    test('a duplicate join request does not add a second roster entry',
+        () async {
+      await build().start();
+
+      final frames = clientFrames();
+      final challenge = frames.first; // subscribe before connecting.
+      final peerId = await clientTransport.connect('host');
+      await challenge;
+      final accepted = frames.whereType<JoinAcceptedFrame>().first;
+
+      await sendToHost(
+        peerId,
+        ControlFrame.joinRequest(
+          version: ProtocolLimits.protocolVersion,
+          displayName: 'Device 1',
+          passwordProof: Uint8List(0),
+        ),
+      );
+      final firstMemberId = (await accepted).memberId;
+
+      // The same connection retries the handshake. The host must ignore it
+      // rather than minting a second roster entry for the same peer.
+      await sendToHost(
+        peerId,
+        ControlFrame.joinRequest(
+          version: ProtocolLimits.protocolVersion,
+          displayName: 'Device 1 (retry)',
+          passwordProof: Uint8List(0),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final roster = (session.state as SessionConnected).roster;
+      expect(roster.length, 2);
+      expect(
+        roster.where((m) => !m.isHost).single.id,
+        firstMemberId,
+      );
+    });
   });
 
   group('membership changes', () {
@@ -400,6 +441,36 @@ void main() {
       await session.stop();
 
       expect(await leave, isA<LeaveFrame>());
+      expect(session.state, isA<SessionIdle>());
+    });
+
+    test('completes when a peer vanished first', () async {
+      await build().start();
+      final frames = clientFrames();
+      final challenge = frames.first; // subscribe before connecting.
+      final peerId = await clientTransport.connect('host');
+      await challenge;
+      final accepted = frames.whereType<JoinAcceptedFrame>().first;
+      await sendToHost(
+        peerId,
+        ControlFrame.joinRequest(
+          version: ProtocolLimits.protocolVersion,
+          displayName: 'Device 1',
+          passwordProof: Uint8List(0),
+        ),
+      );
+      await accepted;
+
+      // Disconnect from the client side without letting the host's event
+      // loop turn process the resulting PeerDisconnectedEvent first. The
+      // underlying FakeHub connection is torn down synchronously, but the
+      // host's roster map is only updated once it processes that event —
+      // so stop(), called immediately after, still finds this peer in its
+      // map and must survive `_transport.disconnect` throwing for a
+      // connection that is already gone.
+      unawaited(clientTransport.disconnect(peerId));
+
+      await expectLater(session.stop(), completes);
       expect(session.state, isA<SessionIdle>());
     });
   });

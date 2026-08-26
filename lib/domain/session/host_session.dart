@@ -86,7 +86,12 @@ class HostSession {
   Future<void> stop() async {
     for (final peerId in _memberIdByPeer.keys.toList()) {
       await _send(peerId, const ControlFrame.leave());
-      await _transport.disconnect(peerId);
+      try {
+        await _transport.disconnect(peerId);
+      } on TransportException {
+        // The peer is already gone (it dropped on its own before we got to
+        // it); that is fine during teardown.
+      }
     }
 
     _memberIdByPeer.clear();
@@ -178,6 +183,13 @@ class HostSession {
     String displayName,
     Uint8List proof,
   ) async {
+    // A peer that has already completed the handshake gets nothing: a
+    // well-behaved client that retries should not be told to disconnect,
+    // and no flow in this design legitimately re-handshakes on an existing
+    // connection. Without this guard, a repeat request would mint a second,
+    // unreachable roster entry for the same connection (spec section 5.3).
+    if (_memberIdByPeer.containsKey(peerId)) return;
+
     final current = _state;
     if (current is! SessionConnected) return;
 
@@ -280,11 +292,16 @@ class HostSession {
     );
   }
 
-  Future<void> _updateAdvertisement(List<Member> roster) =>
-      _transport.updateAdvertisement(
+  Future<void> _updateAdvertisement(List<Member> roster) async {
+    try {
+      await _transport.updateAdvertisement(
         memberCount: roster.length,
         isFull: Roster.isFull(roster),
       );
+    } on TransportException {
+      // Advertising may already have stopped; nothing to update.
+    }
+  }
 
   Future<void> _send(String peerId, ControlFrame frame) async {
     try {
