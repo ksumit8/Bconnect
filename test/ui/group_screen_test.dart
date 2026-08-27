@@ -218,6 +218,74 @@ void main() {
     expect(find.text('Group Talk'), findsOneWidget);
   });
 
+  testWidgets(
+      'End Call as a client leaves cleanly with no spurious snackbar',
+      (tester) async {
+    // This device is a client; it taps End Call itself. FakeHub.disconnect
+    // delivers PeerDisconnectedEvent to both ends, so ClientSession's
+    // `_leaving` flag is the only thing distinguishing "I chose to leave"
+    // from "the connection dropped" — if that guard regressed, this client
+    // would see a spurious connectionLost/hostLeft snackbar instead of a
+    // clean return home.
+    final hostTransport = FakeTransport(hub, deviceId: 'host');
+    addTearDown(hostTransport.dispose);
+    final hostContainer = ProviderContainer(
+      overrides: [transportProvider.overrideWithValue(hostTransport)],
+    );
+    addTearDown(hostContainer.dispose);
+
+    await hostContainer.read(sessionProvider.notifier).createGroup(
+          const GroupConfig(name: 'Team Alpha'),
+          displayName: 'Host',
+        );
+
+    container = ProviderContainer(
+      overrides: [transportProvider.overrideWithValue(transport)],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: BconnectApp(router: buildAppRouter()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The Discover screen this pushes has a perpetual spinner and prune
+    // timer, so `pumpAndSettle()` never converges while it's mounted — use
+    // the bounded pump instead (see `pumpBounded`'s doc above).
+    await tester.tap(find.text('Join Existing Group'));
+    await pumpBounded(tester);
+    await tester.tap(find.text('Team Alpha'));
+    await pumpBounded(tester);
+
+    expect(find.text('Group is Active'), findsOneWidget);
+
+    // End Call runs SessionController.leave(), which awaits _teardown()'s
+    // broadcast StreamSubscription.cancel() — the same fake-async stall as
+    // the host End Call test above. Interleave `tester.pump()` with a short
+    // real-time delay, bounded so a regression fails rather than hangs.
+    final endCallButton = find.text('End Call');
+    await tester.runAsync(() async {
+      await tester.tap(endCallButton);
+      for (var i = 0; i < 100; i++) {
+        await tester.pump();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        if (container.read(sessionProvider) is SessionIdle) break;
+      }
+      for (var i = 0; i < 10; i++) {
+        await tester.pump();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+
+    expect(container.read(sessionProvider), isA<SessionIdle>());
+    expect(find.text('Group Talk'), findsOneWidget);
+    expect(find.textContaining('Connection lost'), findsNothing);
+    expect(find.textContaining('Group ended by host'), findsNothing);
+  });
+
   testWidgets('returns home when the host ends the group', (tester) async {
     // This device is a client; the host tears the group down underneath it.
     final hostTransport = FakeTransport(hub, deviceId: 'host');
@@ -281,5 +349,10 @@ void main() {
 
     expect(find.text('Group Talk'), findsOneWidget);
     expect(find.text('Group ended by host'), findsOneWidget);
+    // The failure must actually be consumed via reset(), or the client's
+    // sessionProvider would stay stuck in SessionFailed forever — the
+    // snackbar and navigation above fire independently of whether reset()
+    // ran, so this is the only assertion that catches that regression.
+    expect(container.read(sessionProvider), isA<SessionIdle>());
   });
 }
