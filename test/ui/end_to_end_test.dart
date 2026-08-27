@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bconnect/app.dart';
 import 'package:bconnect/core/router/app_router.dart';
+import 'package:bconnect/domain/models/audio.dart';
 import 'package:bconnect/domain/models/group_config.dart';
 import 'package:bconnect/domain/models/session_state.dart';
 import 'package:bconnect/state/session_provider.dart';
@@ -131,6 +132,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Earpiece'));
     await tester.pumpAndSettle();
+    // Navigation surviving the detour and the route actually reaching the
+    // transport are independent facts — assert the latter too, or a
+    // regression in the Earpiece option's onTap wiring (wrong route passed,
+    // or the setRoute call dropped) would go uncaught.
+    expect(aTransport.audioRoute, AudioRoute.earpiece);
     await tester.pageBack();
     await tester.pumpAndSettle();
 
