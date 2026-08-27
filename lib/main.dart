@@ -3,18 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
 import 'state/transport_provider.dart';
-import 'transport/fake/fake_hub.dart';
-import 'transport/fake/fake_transport.dart';
+import 'transport/ble/ble_transport.dart';
 
 void main() => runApp(buildProductionApp());
 
 /// The widget tree the shipping app runs.
 ///
-/// Plan A has no real transport yet, so this wires in-memory stand-ins
-/// (FakeTransport over FakeHub) as the running app's transport. Plan B
-/// replaces this override with the real BLE transport; everything above
-/// `transportProvider` is written against the `GroupTransport` interface, so
-/// that swap should not require touching anything else here.
+/// Wires the real Bluetooth LE transport. `FakeTransport` remains, but only as
+/// the test double every widget and session test overrides in — the shipping
+/// app has not used it since Plan B1 Task 4.
+///
+/// Everything above `transportProvider` is written against the
+/// `GroupTransport` interface, so this is the only line the swap touched.
 ///
 /// Extracted from [main] (rather than inlined in `runApp(...)`) so
 /// `test/widget_test.dart` can pump this exact widget tree — including this
@@ -22,8 +22,6 @@ void main() => runApp(buildProductionApp());
 /// test overrides `transportProvider` itself, so none of them could catch
 /// `main()` failing to override it for the real app.
 Widget buildProductionApp() => ProviderScope(
-  overrides: [
-    transportProvider.overrideWithValue(FakeTransport(FakeHub())),
-  ],
+  overrides: [transportProvider.overrideWithValue(BleTransport())],
   child: const BconnectApp(),
 );

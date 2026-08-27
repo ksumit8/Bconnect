@@ -7,6 +7,7 @@ import 'package:bconnect/app.dart';
 import 'package:bconnect/core/router/app_router.dart';
 import 'package:bconnect/main.dart' as app;
 import 'package:bconnect/state/transport_provider.dart';
+import 'package:bconnect/transport/ble/ble_transport.dart';
 import 'package:bconnect/transport/fake/fake_hub.dart';
 import 'package:bconnect/transport/fake/fake_transport.dart';
 import 'package:bconnect/ui/common/action_card.dart';
@@ -48,23 +49,54 @@ void main() {
   // of pumping its widget, trips an unrelated `AnimationController`
   // assertion: `runApp`'s synchronous warm-up frame doesn't interact well
   // with the test binding's clock, whereas `tester.pumpWidget` does.)
-  testWidgets(
-    'main() wires a working transport, so the home screen reaches Create '
-    'enabled',
-    (tester) async {
-      SharedPreferences.setMockInitialValues({});
+  //
+  // Since Plan B1 Task 4 the production transport is the real `BleTransport`,
+  // which needs a radio. So this can no longer assert Create ends up *enabled*
+  // — off-device `isPeripheralSupported()` fails and the home screen correctly
+  // says the device can't host. What it asserts instead is stronger against
+  // the original bug: that the override exists at all, and that it is the real
+  // transport rather than a fake that leaked into the shipping build.
+  testWidgets('main() wires the real BLE transport into the running app', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
 
-      await tester.pumpWidget(app.buildProductionApp());
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(app.buildProductionApp());
+    await tester.pumpAndSettle();
 
-      expect(find.text('Group Talk'), findsOneWidget);
-      expect(find.text('Create New Group'), findsOneWidget);
-      expect(find.text("This device can't host a group"), findsNothing);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(BconnectApp)),
+    );
+    final transport = container.read(transportProvider);
 
-      final createCard = tester.widget<ActionCard>(
-        find.widgetWithText(ActionCard, 'Create New Group'),
-      );
-      expect(createCard.onTap, isNotNull);
-    },
-  );
+    expect(transport, isA<BleTransport>());
+    expect(transport, isNot(isA<FakeTransport>()));
+
+    // And the tree it builds actually renders.
+    expect(find.text('Group Talk'), findsOneWidget);
+    expect(find.text('Create New Group'), findsOneWidget);
+  });
+
+  // The enabled-Create path still needs covering, so cover it where it can be:
+  // over a transport that reports hosting is supported.
+  testWidgets('Create is enabled when the transport can host', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final transport = FakeTransport(FakeHub(), deviceId: 'me');
+    addTearDown(transport.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [transportProvider.overrideWithValue(transport)],
+        child: BconnectApp(router: buildAppRouter()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text("This device can't host a group"), findsNothing);
+
+    final createCard = tester.widget<ActionCard>(
+      find.widgetWithText(ActionCard, 'Create New Group'),
+    );
+    expect(createCard.onTap, isNotNull);
+  });
 }

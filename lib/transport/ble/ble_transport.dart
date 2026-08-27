@@ -5,6 +5,7 @@ import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 
 import '../../domain/models/audio.dart';
 import '../group_transport.dart';
+import 'ble_uuids.dart';
 
 /// The real Bluetooth LE transport.
 ///
@@ -48,6 +49,12 @@ class BleTransport implements GroupTransport {
   final List<StreamSubscription<dynamic>> _subs = [];
 
   bool _initialised = false;
+
+  // Retained so updateAdvertisement can rebuild the packet: BLE has no
+  // "modify advert in place", only stop-and-restart with fresh bytes.
+  String? _advertisedName;
+  int? _advertisedGroupId;
+  bool _advertisedLocked = false;
 
   @override
   Stream<TransportEvent> get events => _events.stream;
@@ -101,7 +108,22 @@ class BleTransport implements GroupTransport {
     // measures; it cannot advertise a chosen one, so this value is ignored.
     int rssi = -55,
   }) async {
-    throw UnimplementedError('Task 4');
+    await init();
+
+    _advertisedName = groupName;
+    _advertisedGroupId = groupId;
+    _advertisedLocked = isLocked;
+
+    await _peripheral.stopAdvertising();
+    await _peripheral.startAdvertising(
+      BleAdvert.encode(
+        groupName: groupName,
+        groupId: groupId,
+        memberCount: memberCount,
+        isLocked: isLocked,
+        isFull: isFull,
+      ),
+    );
   }
 
   @override
@@ -109,12 +131,30 @@ class BleTransport implements GroupTransport {
     required int memberCount,
     required bool isFull,
   }) async {
-    throw UnimplementedError('Task 4');
+    final name = _advertisedName;
+    final id = _advertisedGroupId;
+    if (name == null || id == null) {
+      throw const TransportException('not advertising');
+    }
+
+    // BLE has no "modify advert in place": stop and restart with new data.
+    await _peripheral.stopAdvertising();
+    await _peripheral.startAdvertising(
+      BleAdvert.encode(
+        groupName: name,
+        groupId: id,
+        memberCount: memberCount,
+        isLocked: _advertisedLocked,
+        isFull: isFull,
+      ),
+    );
   }
 
   @override
   Future<void> stopAdvertising() async {
-    throw UnimplementedError('Task 4');
+    _advertisedName = null;
+    _advertisedGroupId = null;
+    await _peripheral.stopAdvertising();
   }
 
   // --- Client role: Task 6 and 7 -----------------------------------------
