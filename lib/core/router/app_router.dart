@@ -1,7 +1,7 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../domain/models/discovered_group.dart';
+import '../../ui/audio/audio_output_screen.dart';
 import '../../ui/create/create_group_screen.dart';
 import '../../ui/discover/discover_screen.dart';
 import '../../ui/group/group_screen.dart';
@@ -42,8 +42,7 @@ GoRouter buildAppRouter() => GoRouter(
               routes: [
                 GoRoute(
                   path: 'audio',
-                  builder: (context, state) =>
-                      const _Pending('Audio Output'),
+                  builder: (context, state) => const AudioOutputScreen(),
                 ),
               ],
             ),
@@ -53,14 +52,3 @@ GoRouter buildAppRouter() => GoRouter(
     );
 
 final appRouter = buildAppRouter();
-
-/// Replaced task by task as each screen lands.
-class _Pending extends StatelessWidget {
-  const _Pending(this.title);
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) =>
-      Scaffold(appBar: AppBar(title: Text(title)));
-}
