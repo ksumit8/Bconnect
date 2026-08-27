@@ -63,6 +63,9 @@ class BleTransport implements GroupTransport {
   final Map<String, Peripheral> _discovered = {};
   StreamSubscription<DiscoveredEventArgs>? _discoverySub;
 
+  final Map<String, Peripheral> _connected = {};
+  final Map<String, GATTCharacteristic> _clientControl = {};
+
   @override
   Stream<TransportEvent> get events => _events.stream;
 
@@ -93,6 +96,32 @@ class BleTransport implements GroupTransport {
         // As above.
       }
     }
+
+    // Notifications from a host arrive here.
+    _subs.add(
+      _central.characteristicNotified.listen((e) {
+        if (e.characteristic.uuid != BleUuids.control) return;
+        _emit(
+          ControlMessageEvent(
+            e.peripheral.uuid.toString(),
+            Uint8List.fromList(e.value),
+          ),
+        );
+      }),
+    );
+
+    // A host going away, or moving out of range.
+    _subs.add(
+      _central.connectionStateChanged.listen((e) {
+        if (e.state == ConnectionState.disconnected) {
+          final id = e.peripheral.uuid.toString();
+          if (_connected.remove(id) != null) {
+            _clientControl.remove(id);
+            _emit(PeerDisconnectedEvent(id));
+          }
+        }
+      }),
+    );
   }
 
   @override
@@ -146,12 +175,33 @@ class BleTransport implements GroupTransport {
       _peripheral.connectionStateChanged.listen((e) {
         final id = e.central.uuid.toString();
         if (e.state == ConnectionState.connected) {
+          // Track the central, but do NOT report the peer as connected yet —
+          // see the notify-state listener below for why.
           _centrals[id] = e.central;
-          _emit(PeerConnectedEvent(id));
         } else {
           _centrals.remove(id);
           _emit(PeerDisconnectedEvent(id));
         }
+      }),
+    );
+
+    // A peer counts as connected only once it has SUBSCRIBED, not merely when
+    // the GATT link opens.
+    //
+    // `HostSession` answers `PeerConnectedEvent` by sending a CHALLENGE, and
+    // the host's only way to send is `notifyCharacteristic`. A notification
+    // published before the client has written the CCCD is dropped by the stack
+    // silently — no error on either side. Emitting on link-up therefore races
+    // the client's subscribe and, when it loses, the client sits on the
+    // password screen forever waiting for a challenge that was thrown away.
+    // Subscription is the first moment the host can actually be heard.
+    _subs.add(
+      _peripheral.characteristicNotifyStateChanged.listen((e) {
+        if (e.characteristic.uuid != BleUuids.control) return;
+        if (!e.state) return;
+        final id = e.central.uuid.toString();
+        _centrals[id] = e.central;
+        _emit(PeerConnectedEvent(id));
       }),
     );
 
@@ -167,6 +217,39 @@ class BleTransport implements GroupTransport {
         }
         _centrals[e.central.uuid.toString()] = e.central;
         _emit(ControlMessageEvent(e.central.uuid.toString(), value));
+      }),
+    );
+
+    // Descriptor requests MUST be answered, and this one is load-bearing.
+    //
+    // When a client subscribes, `setCharacteristicNotifyState` writes the
+    // Client Characteristic Configuration descriptor (0x2902). Android adds
+    // that descriptor to our service automatically, but `bluetooth_low_energy`
+    // does NOT auto-respond to writes on it — `PeripheralManagerImpl.kt:456`
+    // forwards the request to Dart and waits for us. Leave this unhandled and
+    // the client's subscribe never completes, so `connect()` never returns and
+    // the join spinner spins forever with no error anywhere. There is nothing
+    // for us to store: Android tracks the subscription itself.
+    _subs.add(
+      _peripheral.descriptorWriteRequested.listen((e) async {
+        try {
+          await _peripheral.respondWriteRequest(e.request);
+        } catch (_) {
+          // The central vanished mid-request.
+        }
+      }),
+    );
+
+    _subs.add(
+      _peripheral.descriptorReadRequested.listen((e) async {
+        try {
+          await _peripheral.respondReadRequestWithValue(
+            e.request,
+            value: Uint8List(0),
+          );
+        } catch (_) {
+          // As above.
+        }
       }),
     );
 
@@ -291,12 +374,85 @@ class BleTransport implements GroupTransport {
   }
 
   @override
-  Future<String> connect(String deviceId) async =>
-      throw UnimplementedError('Task 7');
+  Future<String> connect(String deviceId) async {
+    final peripheral = _discovered[deviceId];
+    if (peripheral == null) {
+      throw TransportException('no device with id $deviceId');
+    }
+
+    // Stop scanning first. An active LE scan starves the connection attempt on
+    // Android: the radio keeps hopping through the scan window instead of
+    // completing the connection, and `connect()` simply never calls back until
+    // the stack gives up ~25s later. `discoveredGroupsProvider` is still
+    // scanning at this point because the Discover screen is what navigated
+    // here, so this is the normal path, not an edge case.
+    try {
+      await _central.stopDiscovery();
+    } catch (_) {
+      // Not scanning; nothing to stop.
+    }
+
+    try {
+      await _central.connect(peripheral);
+    } catch (e) {
+      throw TransportException('connect failed: $e');
+    }
+
+    final peerId = peripheral.uuid.toString();
+    _connected[peerId] = peripheral;
+
+    // A larger MTU is requested up front. It is not fatal if the peer
+    // refuses; control frames are small. Plan B2's audio needs the headroom.
+    try {
+      await _central.requestMTU(peripheral, mtu: 517);
+    } catch (_) {}
+
+    final services = await _central.discoverGATT(peripheral);
+    final service = services.firstWhere(
+      (s) => s.uuid == BleUuids.service,
+      orElse: () =>
+          throw const TransportException('peer is not a Bconnect host'),
+    );
+    final control = service.characteristics.firstWhere(
+      (c) => c.uuid == BleUuids.control,
+      orElse: () =>
+          throw const TransportException('host has no control characteristic'),
+    );
+    _clientControl[peerId] = control;
+
+    await _central.setCharacteristicNotifyState(
+      peripheral,
+      control,
+      state: true,
+    );
+
+    _emit(PeerConnectedEvent(peerId));
+    return peerId;
+  }
 
   @override
-  Future<void> disconnect(String peerId) async =>
-      throw UnimplementedError('Task 7');
+  Future<void> disconnect(String peerId) async {
+    final peripheral = _connected.remove(peerId);
+    _clientControl.remove(peerId);
+
+    // Host path: the peer is a central we are serving.
+    final central = _centrals.remove(peerId);
+    if (central != null) {
+      try {
+        await _peripheral.disconnect(central);
+      } catch (_) {}
+      _emit(PeerDisconnectedEvent(peerId));
+      return;
+    }
+
+    if (peripheral == null) {
+      throw TransportException('no connection $peerId');
+    }
+    try {
+      await _central.disconnect(peripheral);
+    } catch (_) {}
+    _emit(PeerDisconnectedEvent(peerId));
+  }
 
   @override
   Future<void> sendControl(String peerId, Uint8List bytes) async {
@@ -312,8 +468,24 @@ class BleTransport implements GroupTransport {
       return;
     }
 
-    // Client path is added in Task 7.
-    throw TransportException('no connection $peerId');
+    // Client path: write to the host's control characteristic.
+    final peripheral = _connected[peerId];
+    final clientControl = _clientControl[peerId];
+    if (peripheral == null || clientControl == null) {
+      throw TransportException('no connection $peerId');
+    }
+    try {
+      // withResponse: control frames carry the join handshake, and a silently
+      // dropped JOIN_REQUEST would strand the client on the password screen.
+      await _central.writeCharacteristic(
+        peripheral,
+        clientControl,
+        value: bytes,
+        type: GATTCharacteristicWriteType.withResponse,
+      );
+    } catch (e) {
+      throw TransportException('write failed for $peerId: $e');
+    }
   }
 
   // --- Audio: Plan B2 ----------------------------------------------------
@@ -342,6 +514,9 @@ class BleTransport implements GroupTransport {
     }
     _subs.clear();
     _discovered.clear();
+    _connected.clear();
+    _clientControl.clear();
+    _centrals.clear();
     await _events.close();
   }
 }

@@ -76,3 +76,32 @@ FAIL modes:
   packet; the group is still joinable, but shorten the group name.
 - Padlock is open -> the `isLocked` flag is not surviving the advertisement;
   check `AdvertPayload` encode/decode.
+
+## Check 4 — two phones join a real group (Task 7)
+
+1. Phone A: create a password-protected group "Team Alpha" with password
+   `hunter2`.
+2. Phone B: Join Existing Group -> tap `Team Alpha` -> enter `hunter2` ->
+   tap Join Group.
+
+PASS when ALL of these hold:
+- Phone B lands on the group screen showing `Group is Active`
+- Phone B's roster shows 2 members
+- **Phone A's roster grows to 2 members without being touched**
+- Phone A's member badge reads `2 Members`
+
+3. Now test the wrong password: phone B leaves, rejoins, enters `wrong`.
+
+PASS when phone B stays on the password screen showing `Incorrect password`,
+and phone A's roster stays at 1.
+
+4. Finally, phone A taps End Call.
+
+PASS when phone B returns to its home screen showing `Group ended by host`.
+
+### Note on granting permissions
+
+Some devices refuse `adb shell pm grant` with
+`SecurityException: Neither user 2000 nor current process has
+GRANT_RUNTIME_PERMISSIONS` (observed on the IV2201). There, accept the
+Nearby-devices dialog in the UI instead.
