@@ -148,6 +148,31 @@ Dart-side dependencies (`flutter_blue_plus`, `record`, `permission_handler`,
 `audio_session`) are all MIT and used only where they do not sit on the
 real-time path.
 
+### 3.9 BLE package: bluetooth_low_energy (MIT), not flutter_blue_plus
+
+`flutter_blue_plus` was named during planning and recorded as MIT. **That was
+wrong.** It ships under the FlutterBluePlus License, which requires a paid
+commercial licence for any for-profit use, and enforces it in the API via
+`connect(license: License.commercial)`.
+
+Free alternatives were checked by reading their LICENSE files directly and
+resolving them against this project's Dart 3.10.7:
+
+| Package | Licence | Dart SDK | Verdict |
+|---|---|---|---|
+| `bluetooth_low_energy` 6.2.1 | MIT | >=3.9.2 | **chosen** — central AND peripheral |
+| `flutter_reactive_ble` 5.5.0 | BSD | >=2.17.0 | viable, central only |
+| `ble_peripheral` 2.4.0 | MIT | >=3.2.0 | viable, peripheral only |
+| `universal_ble` 2.1.1 | — | ^3.12.0 | rejected, needs newer Dart |
+| `quick_blue` 0.4.1 | — | <3.0.0 | rejected, pre-Dart-3 |
+| `flutter_blue_plus` 2.3.12 | paid | ^3.0.0 | rejected, licence |
+
+`bluetooth_low_energy` covers both roles in one free dependency and is proven
+on the target hardware (§9.1). This supersedes §3.8's assumption that the
+central and peripheral halves would need hand-written Kotlin: the package's
+own Android implementation is the platform layer. Kotlin is still expected for
+the **audio path**, which must not cross the Dart boundary (§3.5).
+
 ## 4. Architecture
 
 Five layers:
@@ -410,6 +435,53 @@ discoverable-mode limitations.
 If only (3) fails, the fallback is graduated rather than fatal: reduce the
 maximum group size and the concurrent-talker cap to whatever the hardware
 sustains, and update §5.5.
+
+#### Phase 0 RESULTS — executed 2026-08-27
+
+Measured on a TC27 (Android 14) advertising to an IV2201 (Android 13), using
+`bluetooth_low_energy` 6.2.1 for both roles.
+
+| Gate | Result |
+|---|---|
+| 1. Peripheral role | **PASS** — both devices advertise, radio-confirmed |
+| 2. Single link | **PASS** — 278–479 kbps, 83 ms idle RTT, MTU 517 |
+| 3. Aggregate | **PARKED** — needs a third device; two were available |
+
+Gate 2 detail: throughput 278.1 and 479.4 kbps across two runs against a
+60 kbps requirement. Latency was measured separately on an idle link (83 ms
+median, 108 ms max) and under deliberate saturation (1294 ms median, 3283 ms
+max).
+
+**Use 275 kbps as the planning figure, not 479** — run-to-run variance was
+substantial.
+
+**Latency collapses ~15× once the link saturates.** Voice at 12.2 kbps uses
+roughly 4% of measured capacity, so this does not arise in normal operation,
+but it means the concurrent-talker cap (§5.4) and the low-bitrate codec are
+**latency** decisions as much as bandwidth ones. Neither may be relaxed on the
+grounds that spare bandwidth exists.
+
+Gate 3 remains the only unvalidated assumption in the transport design. Its
+graduated fallback above still applies.
+
+#### Phase 0 findings that bind Plan B
+
+1. **`BLUETOOTH_SCAN` must declare `android:usesPermissionFlags="neverForLocation"`.**
+   Without it, Android 12+ requires `ACCESS_FINE_LOCATION` for scan results to
+   be delivered, and if that permission is absent the platform returns **zero
+   results while reporting success**. This failure is silent and looks exactly
+   like broken hardware; it cost roughly 50 minutes during the spike and led to
+   an incorrect conclusion that the device could not scan.
+
+2. **`flutter_blue_plus` must not be used.** It requires a paid commercial
+   licence for for-profit use, enforced in the API. `bluetooth_low_energy`
+   (MIT) covers both central and peripheral roles, resolves on Dart 3.10.7, and
+   is what produced the results above. See §3.9.
+
+3. **`bluetooth_low_energy`'s `authorize()` never completes** when permissions
+   are already granted and the adapter is powered on. It must be skipped when
+   `state == poweredOn`, or wrapped in a timeout, or the app hangs on a blank
+   screen indefinitely.
 
 ### 9.2 Plan decomposition
 
