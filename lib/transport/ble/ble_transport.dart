@@ -56,10 +56,13 @@ class BleTransport implements GroupTransport {
   int? _advertisedGroupId;
   bool _advertisedLocked = false;
 
+  GATTCharacteristic? _controlCharacteristic;
+  final Map<String, Central> _centrals = {};
+  bool _serviceAdded = false;
+
   @override
   Stream<TransportEvent> get events => _events.stream;
 
-  // ignore: unused_element
   void _emit(TransportEvent e) {
     if (!_events.isClosed) _events.add(e);
   }
@@ -97,6 +100,92 @@ class BleTransport implements GroupTransport {
 
   // --- Host role: Task 4 and 5 -------------------------------------------
 
+  /// Publishes the GATT service and wires the host-side listeners.
+  ///
+  /// Idempotent: `startAdvertising` may be called more than once (creating a
+  /// group after ending a previous one), and re-adding a service throws.
+  Future<void> _ensureHostService() async {
+    if (_serviceAdded) return;
+    _serviceAdded = true;
+
+    final control = GATTCharacteristic.mutable(
+      uuid: BleUuids.control,
+      properties: [
+        GATTCharacteristicProperty.read,
+        GATTCharacteristicProperty.write,
+        GATTCharacteristicProperty.writeWithoutResponse,
+        GATTCharacteristicProperty.notify,
+      ],
+      permissions: [
+        GATTCharacteristicPermission.read,
+        GATTCharacteristicPermission.write,
+      ],
+      descriptors: [],
+    );
+    _controlCharacteristic = control;
+
+    await _peripheral.removeAllServices();
+    await _peripheral.addService(
+      GATTService(
+        uuid: BleUuids.service,
+        isPrimary: true,
+        includedServices: [],
+        characteristics: [control],
+      ),
+    );
+
+    // Note: `bluetooth_low_energy` exports `ConnectionState`, and so does
+    // `package:flutter/material.dart`. This file does not import material, so
+    // the reference below is unambiguous. If you ever add a material import
+    // here, alias one of them (`import '...' as ble show ConnectionState;`)
+    // rather than renaming anything.
+    _subs.add(
+      _peripheral.connectionStateChanged.listen((e) {
+        final id = e.central.uuid.toString();
+        if (e.state == ConnectionState.connected) {
+          _centrals[id] = e.central;
+          _emit(PeerConnectedEvent(id));
+        } else {
+          _centrals.remove(id);
+          _emit(PeerDisconnectedEvent(id));
+        }
+      }),
+    );
+
+    // A client's control frame arrives as a write request. Respond first —
+    // an unanswered request stalls that client's GATT queue — then surface it.
+    _subs.add(
+      _peripheral.characteristicWriteRequested.listen((e) async {
+        final value = Uint8List.fromList(e.request.value);
+        try {
+          await _peripheral.respondWriteRequest(e.request);
+        } catch (_) {
+          // The central vanished mid-request; the disconnect event handles it.
+        }
+        _centrals[e.central.uuid.toString()] = e.central;
+        _emit(ControlMessageEvent(e.central.uuid.toString(), value));
+      }),
+    );
+
+    // The control characteristic is a message pipe, not a value, so there is
+    // nothing meaningful to read from it. It still declares READ, because a
+    // central that cannot read the characteristic cannot discover it on some
+    // stacks — and an unanswered read request stalls that central's GATT queue
+    // exactly the way an unanswered write does. So: answer, with nothing.
+    _subs.add(
+      _peripheral.characteristicReadRequested.listen((e) async {
+        try {
+          await _peripheral.respondReadRequestWithValue(
+            e.request,
+            value: Uint8List(0),
+          );
+        } catch (_) {
+          // As above.
+        }
+      }),
+    );
+  }
+
   @override
   Future<void> startAdvertising({
     required String groupName,
@@ -109,6 +198,7 @@ class BleTransport implements GroupTransport {
     int rssi = -55,
   }) async {
     await init();
+    await _ensureHostService();
 
     _advertisedName = groupName;
     _advertisedGroupId = groupId;
@@ -154,6 +244,9 @@ class BleTransport implements GroupTransport {
   Future<void> stopAdvertising() async {
     _advertisedName = null;
     _advertisedGroupId = null;
+    _centrals.clear();
+    // The GATT service deliberately stays published: HostSession.stop() calls
+    // stopAdvertising, and a later startAdvertising must still work.
     await _peripheral.stopAdvertising();
   }
 
@@ -174,8 +267,22 @@ class BleTransport implements GroupTransport {
       throw UnimplementedError('Task 7');
 
   @override
-  Future<void> sendControl(String peerId, Uint8List bytes) async =>
-      throw UnimplementedError('Task 5');
+  Future<void> sendControl(String peerId, Uint8List bytes) async {
+    // Host path: notify the central on the control characteristic.
+    final central = _centrals[peerId];
+    final control = _controlCharacteristic;
+    if (central != null && control != null) {
+      try {
+        await _peripheral.notifyCharacteristic(central, control, value: bytes);
+      } catch (e) {
+        throw TransportException('notify failed for $peerId: $e');
+      }
+      return;
+    }
+
+    // Client path is added in Task 7.
+    throw TransportException('no connection $peerId');
+  }
 
   // --- Audio: Plan B2 ----------------------------------------------------
   //

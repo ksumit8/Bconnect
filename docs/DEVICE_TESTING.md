@@ -39,3 +39,22 @@ If nothing appears, check in this order — the first is by far the most common:
    then returns zero results while reporting success.
 2. Phone A's app lost foreground; advertising stops with it.
 3. Bluetooth is off on either device.
+
+## Check 2 — a central can connect and exchange control frames (Task 5)
+
+With phone A hosting "Team Alpha", on phone B open nRF Connect, find
+`Team Alpha`, and tap CONNECT.
+
+PASS when:
+- nRF Connect shows CONNECTED
+- a service `0000b1c7-...` is listed
+- inside it, a characteristic `0000b1c8-...` shows properties
+  READ, WRITE, WRITE NO RESPONSE, NOTIFY
+
+Then, on phone A, watch logcat:
+
+    adb -s $A logcat | grep -i flutter
+
+PASS when a connection is registered (the roster does not change yet —
+`HostSession` only adds a member after a valid JOIN_REQUEST, which nRF
+Connect does not send).
