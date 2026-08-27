@@ -60,6 +60,9 @@ class BleTransport implements GroupTransport {
   final Map<String, Central> _centrals = {};
   bool _serviceAdded = false;
 
+  final Map<String, Peripheral> _discovered = {};
+  StreamSubscription<DiscoveredEventArgs>? _discoverySub;
+
   @override
   Stream<TransportEvent> get events => _events.stream;
 
@@ -253,10 +256,39 @@ class BleTransport implements GroupTransport {
   // --- Client role: Task 6 and 7 -----------------------------------------
 
   @override
-  Future<void> startScan() async => throw UnimplementedError('Task 6');
+  Future<void> startScan() async {
+    await init();
+
+    // One listener for the life of the transport, attached before discovery
+    // starts so no advert is missed. `discoveredGroupsProvider` calls
+    // startScan every time the Discover screen is opened; a fresh listener per
+    // call would decode every advert once per visit and never be released
+    // until dispose().
+    _discoverySub ??= _central.discovered.listen((e) {
+      final group = BleAdvert.decode(
+        e.advertisement,
+        deviceId: e.peripheral.uuid.toString(),
+        rssi: e.rssi,
+        seenAt: DateTime.now(),
+      );
+      // decode() returns null for anything that is not a current-version
+      // Bconnect advert, including other apps on the same service UUID.
+      if (group == null) return;
+
+      _discovered[group.deviceId] = e.peripheral;
+      _emit(ScanResultEvent(group));
+    });
+
+    // Unfiltered: filtering by service UUID hides the difference between
+    // "nothing on air" and "advertising without our UUID", which makes field
+    // diagnosis much harder. decode() does the filtering instead.
+    await _central.startDiscovery();
+  }
 
   @override
-  Future<void> stopScan() async => throw UnimplementedError('Task 6');
+  Future<void> stopScan() async {
+    await _central.stopDiscovery();
+  }
 
   @override
   Future<String> connect(String deviceId) async =>
@@ -303,10 +335,13 @@ class BleTransport implements GroupTransport {
 
   @override
   Future<void> dispose() async {
+    await _discoverySub?.cancel();
+    _discoverySub = null;
     for (final s in _subs) {
       await s.cancel();
     }
     _subs.clear();
+    _discovered.clear();
     await _events.close();
   }
 }

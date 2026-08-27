@@ -58,3 +58,21 @@ Then, on phone A, watch logcat:
 PASS when a connection is registered (the roster does not change yet —
 `HostSession` only adds a member after a valid JOIN_REQUEST, which nRF
 Connect does not send).
+
+## Check 3 — our own app discovers a real group (Task 6)
+
+1. Phone A: create a password-protected group "Team Alpha".
+2. Phone B: open the app, tap **Join Existing Group**.
+
+PASS when phone B's list shows:
+- the name `Team Alpha`
+- a **closed padlock** (it is password-protected)
+- `1 Member`
+- signal bars
+
+FAIL modes:
+- List stays empty -> check `neverForLocation` in the manifest first.
+- Name shows as `Unnamed group` -> the radio dropped the name to fit the
+  packet; the group is still joinable, but shorten the group name.
+- Padlock is open -> the `isLocked` flag is not surviving the advertisement;
+  check `AdvertPayload` encode/decode.
