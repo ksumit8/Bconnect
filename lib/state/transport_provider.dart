@@ -35,3 +35,26 @@ final peripheralSupportedProvider = FutureProvider<bool>(
   (ref) => ref.watch(transportProvider).isPeripheralSupported(),
   retry: (retryCount, error) => null,
 );
+
+/// The three-way decision of whether hosting should currently be offered,
+/// shared by every screen that gates on it (Home's Create card, Settings'
+/// "Can host groups" notice).
+///
+/// This is the single place that turns `peripheralSupportedProvider`'s
+/// `AsyncValue<bool>` into a plain `bool`: loading is treated as
+/// optimistically true so the UI doesn't flicker disabled while the probe is
+/// still in flight, and a failed probe fails closed (treated as
+/// unsupported) rather than defaulting to true, so a broken Bluetooth stack
+/// doesn't let the user start creating a group only to fail partway through
+/// (spec section 8). Extracted here — rather than each screen writing its
+/// own `.when(...)` — because this exact three-way branch was previously
+/// written twice and drifted: Home did it correctly, Settings read `.value`
+/// directly and so reported "Can host groups" even when the probe had
+/// failed.
+final canHostProvider = Provider<bool>((ref) {
+  return ref.watch(peripheralSupportedProvider).when(
+        data: (supported) => supported,
+        loading: () => true,
+        error: (_, _) => false,
+      );
+});

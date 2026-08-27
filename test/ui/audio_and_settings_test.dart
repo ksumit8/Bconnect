@@ -27,9 +27,19 @@ void main() {
 
   tearDown(() async => transport.dispose());
 
-  Future<void> pumpApp(WidgetTester tester) async {
+  Future<void> pumpApp(WidgetTester tester, {Object? peripheralError}) async {
     container = ProviderContainer(
-      overrides: [transportProvider.overrideWithValue(transport)],
+      overrides: [
+        transportProvider.overrideWithValue(transport),
+        if (peripheralError != null)
+          // Riverpod's automatic retry is disabled on this provider
+          // (`retry: (_, __) => null`) precisely so this AsyncError is
+          // reachable in tests rather than staying stuck in AsyncLoading
+          // through the default retry backoff.
+          peripheralSupportedProvider.overrideWith(
+            (ref) async => throw peripheralError,
+          ),
+      ],
     );
     addTearDown(container.dispose);
 
@@ -135,8 +145,11 @@ void main() {
   });
 
   group('settings', () {
-    Future<void> openSettings(WidgetTester tester) async {
-      await pumpApp(tester);
+    Future<void> openSettings(
+      WidgetTester tester, {
+      Object? peripheralError,
+    }) async {
+      await pumpApp(tester, peripheralError: peripheralError);
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
     }
@@ -165,6 +178,21 @@ void main() {
       await openSettings(tester);
 
       expect(find.text('Can host groups'), findsOneWidget);
+    });
+
+    testWidgets(
+        "fails closed and reports that the device can't host when the "
+        'peripheral probe fails', (tester) async {
+      await openSettings(tester, peripheralError: Exception('probe failed'));
+
+      // Regression test: this screen used to read
+      // `peripheralSupportedProvider.value` directly, which is `null` on
+      // `AsyncError` — so `canHost == false` was also false, and a device
+      // whose capability probe genuinely failed was told it could host.
+      // home_screen_test.dart's "disables Create New Group when the
+      // peripheral probe fails" test covers Home's side of this same fact.
+      expect(find.text("Can't host groups"), findsOneWidget);
+      expect(find.text('Can host groups'), findsNothing);
     });
 
     testWidgets('clears recent groups', (tester) async {

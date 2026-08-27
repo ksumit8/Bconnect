@@ -34,6 +34,13 @@ class _JoinPasswordScreenState extends ConsumerState<JoinPasswordScreen> {
   }
 
   Future<void> _join() async {
+    // Guards against a re-entrant join: the button already disables itself
+    // via `_busy`, but `onSubmitted` (Enter/Done on the keyboard) is not
+    // gated by it and can fire `_join` again while the first call is still
+    // awaiting its handshake. A second call's `_teardown()` would then
+    // dispose the first `ClientSession` mid-flight.
+    if (_busy) return;
+
     if (_password.text.isEmpty) {
       setState(() => _error = 'Enter a password');
       return;

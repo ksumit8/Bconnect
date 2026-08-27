@@ -145,6 +145,26 @@ void main() {
     },
   );
 
+  test(
+    'throws when decoding a member with an out-of-range presence index',
+    () {
+      final full = FrameCodec.encode(
+        ControlFrame.rosterUpdate(
+          members: const [Member(id: 'm1', displayName: 'You')],
+        ),
+      );
+      // Overwrite the presence byte (last byte, since it's the final field
+      // of the single, final member) with an index beyond the enum.
+      final tampered = Uint8List.fromList(full);
+      tampered[tampered.length - 1] = 99;
+
+      expect(
+        () => FrameCodec.decode(tampered),
+        throwsA(isA<FrameDecodeException>()),
+      );
+    },
+  );
+
   test('throws on invalid UTF-8 rather than an uncaught FormatException', () {
     // Frame type 6 (talkStart) followed by a length-1 string field
     // containing an invalid UTF-8 lead byte.

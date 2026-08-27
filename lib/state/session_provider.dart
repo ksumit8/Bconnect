@@ -58,9 +58,15 @@ class SessionController extends Notifier<SessionState> {
     _client = client;
     _subscription = client.states.listen((s) => state = s);
 
-    // Completes once the handshake settles either way.
+    // Completes once the handshake settles either way. `orElse` covers a
+    // re-entrant join (a second call to joinGroup/leave tearing this client
+    // down while this one is still in flight): `_teardown()` disposes the
+    // client, closing `_states`, and `Stream.firstWhere` with no `orElse`
+    // completes with an uncaught `StateError` when the stream ends
+    // unmatched. Falling back to idle here mirrors `leave()`'s own outcome.
     final settled = client.states.firstWhere(
       (s) => s is SessionConnected || s is SessionFailed,
+      orElse: () => const SessionState.idle(),
     );
 
     await client.join(group, password: password);

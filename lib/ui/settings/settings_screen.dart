@@ -47,7 +47,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
 
     final displayName = ref.watch(displayNameProvider);
-    final canHost = ref.watch(peripheralSupportedProvider).value;
+    // Fails closed the same way Home's Create card does — see
+    // `canHostProvider`'s doc. Previously this read `.value` off
+    // `peripheralSupportedProvider` directly, which is `null` on
+    // `AsyncError`, so a device whose capability probe failed was told it
+    // could host.
+    final canHost = ref.watch(canHostProvider);
 
     // The provider may already have resolved before this screen first built,
     // in which case `ref.listen` above will not fire for that value.
@@ -105,20 +110,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(
-                canHost == false ? Icons.error_outline : Icons.bluetooth,
-                color: canHost == false
-                    ? AppColors.danger
-                    : AppColors.textSecondary,
+                canHost ? Icons.bluetooth : Icons.error_outline,
+                color: canHost ? AppColors.textSecondary : AppColors.danger,
               ),
               title: Text(
-                canHost == false ? "Can't host groups" : 'Can host groups',
+                canHost ? 'Can host groups' : "Can't host groups",
                 style: const TextStyle(color: AppColors.textPrimary),
               ),
               subtitle: Text(
-                canHost == false
-                    ? "This device's Bluetooth can't advertise, so it can "
-                        'only join groups.'
-                    : 'This device can create and advertise groups.',
+                canHost
+                    ? 'This device can create and advertise groups.'
+                    : "This device's Bluetooth can't advertise, so it can "
+                        'only join groups.',
                 style: const TextStyle(
                     color: AppColors.textSecondary, fontSize: 12),
               ),

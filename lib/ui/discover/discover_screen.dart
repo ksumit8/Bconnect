@@ -20,58 +20,78 @@ String _errorMessage(SessionError error) => switch (error) {
       _ => 'Could not join the group',
     };
 
-class DiscoverScreen extends ConsumerWidget {
+class DiscoverScreen extends ConsumerStatefulWidget {
   const DiscoverScreen({super.key});
 
-  Future<void> _join(
-    BuildContext context,
-    WidgetRef ref,
-    DiscoveredGroup group,
-  ) async {
+  @override
+  ConsumerState<DiscoverScreen> createState() => _DiscoverScreenState();
+}
+
+class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
+  // Guards against a re-entrant join: without it, a second tap while the
+  // first join is still awaiting its handshake starts a second `joinGroup`,
+  // whose `_teardown()` disposes the first `ClientSession` mid-flight (see
+  // `SessionController.joinGroup`'s `orElse` fix for the `StateError` that
+  // used to cause).
+  bool _joining = false;
+
+  Future<void> _join(BuildContext context, DiscoveredGroup group) async {
     if (group.isLocked) {
       context.push('/join', extra: group);
       return;
     }
 
-    final displayName = await ref.read(displayNameProvider.future);
-    if (!context.mounted) return;
+    if (_joining) return;
+    _joining = true;
 
-    // `ClientSession.join` resolves to `SessionFailed` rather than throwing
-    // for protocol-level rejections (wrong password, full, incompatible
-    // version, connection lost); this try/catch only guards the genuinely-
-    // throwing case, e.g. a `TransportException` surfacing some other way.
     try {
-      await ref
-          .read(sessionProvider.notifier)
-          .joinGroup(group, displayName: displayName);
-    } on TransportException {
+      final displayName = await ref.read(displayNameProvider.future);
       if (!context.mounted) return;
-      ref.read(sessionProvider.notifier).reset();
-      _showError(context, 'Could not join the group');
-      return;
-    }
 
-    // Backing out of this screen while the handshake is in flight unmounts
-    // the widget and disposes `discoveredGroupsProvider`; guard before
-    // touching `ref` again so that doesn't throw a `StateError`.
-    if (!context.mounted) return;
-
-    final state = ref.read(sessionProvider);
-    switch (state) {
-      case SessionConnected():
-        await ref.read(recentGroupsProvider.notifier).record(
-              groupId: state.groupId,
-              name: state.groupName,
-              memberCount: state.roster.length,
-            );
-        if (context.mounted) context.go('/group');
-      case SessionFailed(:final error):
+      // `ClientSession.join` resolves to `SessionFailed` rather than
+      // throwing for protocol-level rejections (wrong password, full,
+      // incompatible version, connection lost); this try/catch only guards
+      // the genuinely-throwing case, e.g. a `TransportException` surfacing
+      // some other way.
+      try {
+        await ref
+            .read(sessionProvider.notifier)
+            .joinGroup(group, displayName: displayName);
+      } on TransportException {
+        if (!context.mounted) return;
         ref.read(sessionProvider.notifier).reset();
-        _showError(context, _errorMessage(error));
-      case SessionIdle():
-      case SessionDiscovering():
-      case SessionJoining():
-        break;
+        _showError(context, 'Could not join the group');
+        return;
+      }
+
+      // Backing out of this screen while the handshake is in flight unmounts
+      // the widget and disposes `discoveredGroupsProvider`; guard before
+      // touching `ref` again so that doesn't throw a `StateError`.
+      if (!context.mounted) return;
+
+      final state = ref.read(sessionProvider);
+      switch (state) {
+        case SessionConnected():
+          await ref.read(recentGroupsProvider.notifier).record(
+                groupId: state.groupId,
+                name: state.groupName,
+                memberCount: state.roster.length,
+              );
+          if (context.mounted) context.go('/group');
+        case SessionFailed(:final error):
+          ref.read(sessionProvider.notifier).reset();
+          _showError(context, _errorMessage(error));
+        case SessionIdle():
+        case SessionDiscovering():
+        case SessionJoining():
+          break;
+      }
+    } finally {
+      // Only reset the guard if the screen is still around to reuse it;
+      // touching `mounted`-gated state on a disposed State is otherwise
+      // harmless here since `_joining` is a plain field, but there is no
+      // reason to write it once the screen is gone.
+      if (mounted) _joining = false;
     }
   }
 
@@ -82,7 +102,7 @@ class DiscoverScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final groups = ref.watch(discoveredGroupsProvider);
 
     return Scaffold(
@@ -122,8 +142,7 @@ class DiscoverScreen extends ConsumerWidget {
                       for (final g in list)
                         GroupTile(
                           group: g,
-                          onTap:
-                              g.isFull ? null : () => _join(context, ref, g),
+                          onTap: g.isFull ? null : () => _join(context, g),
                         ),
                     ],
                   ),
