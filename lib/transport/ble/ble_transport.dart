@@ -63,6 +63,20 @@ class BleTransport implements GroupTransport {
   final Map<String, Peripheral> _discovered = {};
   StreamSubscription<DiscoveredEventArgs>? _discoverySub;
 
+  // Whether the radio is actually scanning, and a pending deferred stop.
+  //
+  // Android throttles an app to roughly five scan starts per 30 seconds and
+  // then silently ignores further ones — the scan reports success and delivers
+  // nothing, and on the IV2201 it went further and parked the calling thread
+  // inside `BluetoothLeScanner.startRegistration`, needing a Bluetooth toggle
+  // to clear. `discoveredGroupsProvider` is autoDispose, so it calls
+  // startScan() on build and stopScan() on dispose: walking list -> password
+  // -> back -> list burns that budget in seconds. So starting is idempotent,
+  // and stopping is deferred long enough that a quick round trip through
+  // another screen never actually stops the radio.
+  bool _scanning = false;
+  Timer? _deferredStopScan;
+
   final Map<String, Peripheral> _connected = {};
   final Map<String, GATTCharacteristic> _clientControl = {};
 
@@ -107,6 +121,38 @@ class BleTransport implements GroupTransport {
         // As above.
       }
     }
+
+    // The adapter can be switched off underneath us. Everything cached about
+    // the radio's state is invalid when that happens — in particular
+    // `_scanning`, which would otherwise stay true forever and make every
+    // later startScan() short-circuit into a no-op, so the app would never
+    // scan again until it was killed. Observed exactly that when Bluetooth was
+    // toggled off and back on mid-session.
+    _subs.add(
+      _central.stateChanged.listen((e) {
+        if (e.state == BluetoothLowEnergyState.poweredOn) return;
+        _deferredStopScan?.cancel();
+        _deferredStopScan = null;
+        _scanning = false;
+        _discovered.clear();
+        _connected.clear();
+        _clientControl.clear();
+        _earlyControl.clear();
+      }),
+    );
+
+    _subs.add(
+      _peripheral.stateChanged.listen((e) {
+        if (e.state == BluetoothLowEnergyState.poweredOn) return;
+        // The GATT service dies with the adapter; let startAdvertising
+        // republish it rather than assuming it is still there.
+        _serviceAdded = false;
+        _controlCharacteristic = null;
+        _centrals.clear();
+        _advertisedName = null;
+        _advertisedGroupId = null;
+      }),
+    );
 
     // Notifications from a host arrive here.
     _subs.add(
@@ -356,6 +402,10 @@ class BleTransport implements GroupTransport {
   Future<void> startScan() async {
     await init();
 
+    // Coming back before the deferred stop fired: keep the existing scan.
+    _deferredStopScan?.cancel();
+    _deferredStopScan = null;
+
     // One listener for the life of the transport, attached before discovery
     // starts so no advert is missed. `discoveredGroupsProvider` calls
     // startScan every time the Discover screen is opened; a fresh listener per
@@ -376,6 +426,9 @@ class BleTransport implements GroupTransport {
       _emit(ScanResultEvent(group));
     });
 
+    if (_scanning) return;
+    _scanning = true;
+
     // Unfiltered: filtering by service UUID hides the difference between
     // "nothing on air" and "advertising without our UUID", which makes field
     // diagnosis much harder. decode() does the filtering instead.
@@ -384,7 +437,17 @@ class BleTransport implements GroupTransport {
 
   @override
   Future<void> stopScan() async {
-    await _central.stopDiscovery();
+    _deferredStopScan?.cancel();
+    _deferredStopScan = Timer(const Duration(seconds: 5), () async {
+      _deferredStopScan = null;
+      if (!_scanning) return;
+      _scanning = false;
+      try {
+        await _central.stopDiscovery();
+      } catch (_) {
+        // Adapter went away; nothing to stop.
+      }
+    });
   }
 
   @override
@@ -537,12 +600,31 @@ class BleTransport implements GroupTransport {
 
   @override
   Future<void> dispose() async {
+    _deferredStopScan?.cancel();
+    _deferredStopScan = null;
     await _discoverySub?.cancel();
     _discoverySub = null;
     for (final s in _subs) {
       await s.cancel();
     }
     _subs.clear();
+
+    // Stop the radio doing work after teardown: a live advertisement or scan
+    // outlives the app's UI and drains battery.
+    try {
+      await _peripheral.stopAdvertising();
+    } catch (_) {}
+    try {
+      await _central.stopDiscovery();
+    } catch (_) {}
+    _scanning = false;
+
+    for (final p in _connected.values) {
+      try {
+        await _central.disconnect(p);
+      } catch (_) {}
+    }
+
     _discovered.clear();
     _earlyControl.clear();
     _connected.clear();

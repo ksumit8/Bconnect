@@ -121,3 +121,27 @@ Then turn Bluetooth OFF on phone A and launch the app.
 
 PASS when the home screen shows `This device can't host a group` and the
 Create card does not navigate when tapped.
+
+## Check 6 — real-world conditions (Task 9)
+
+**Duplicate adverts.** Phone A hosts. On phone B, open Join Group, press
+Refresh five times.
+
+PASS when `Team Alpha` appears exactly ONCE in the list, not five times, and
+the list keeps updating afterwards — five rapid restarts is also what trips
+Android's scan-frequency throttle, so this doubles as the regression test for
+that.
+
+**Out of range.** With both phones in a group, walk phone B away until it
+disconnects (or turn its Bluetooth off).
+
+PASS when phone A's roster drops back to 1 member, and phone B shows
+`Connection lost` and returns home.
+
+**Rejoin.** Bring phone B back / turn Bluetooth on, and join again.
+
+PASS when the join succeeds and phone A's roster returns to 2.
+
+**Battery.** Leave phone A hosting for 5 minutes with the screen on.
+
+PASS when the group is still discoverable from phone B afterwards.
