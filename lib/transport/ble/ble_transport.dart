@@ -66,6 +66,17 @@ class BleTransport implements GroupTransport {
   final Map<String, Peripheral> _connected = {};
   final Map<String, GATTCharacteristic> _clientControl = {};
 
+  // Control frames that arrived before `connect()` returned, keyed by peerId.
+  //
+  // The host sends its CHALLENGE the moment our CCCD write lands — which
+  // happens inside `connect()`, before the future completes. `ClientSession`
+  // only learns its peerId FROM that future, and drops any event whose peerId
+  // does not match, so a challenge delivered early is thrown away and the join
+  // hangs forever. Whether it lands early is a race: it did not on a cold
+  // link, and did on a warm one. Buffer, then flush once the caller has had a
+  // turn.
+  final Map<String, List<Uint8List>> _earlyControl = {};
+
   @override
   Stream<TransportEvent> get events => _events.stream;
 
@@ -101,12 +112,14 @@ class BleTransport implements GroupTransport {
     _subs.add(
       _central.characteristicNotified.listen((e) {
         if (e.characteristic.uuid != BleUuids.control) return;
-        _emit(
-          ControlMessageEvent(
-            e.peripheral.uuid.toString(),
-            Uint8List.fromList(e.value),
-          ),
-        );
+        final id = e.peripheral.uuid.toString();
+        final bytes = Uint8List.fromList(e.value);
+        final pending = _earlyControl[id];
+        if (pending != null) {
+          pending.add(bytes);
+          return;
+        }
+        _emit(ControlMessageEvent(id, bytes));
       }),
     );
 
@@ -117,6 +130,7 @@ class BleTransport implements GroupTransport {
           final id = e.peripheral.uuid.toString();
           if (_connected.remove(id) != null) {
             _clientControl.remove(id);
+            _earlyControl.remove(id);
             _emit(PeerDisconnectedEvent(id));
           }
         }
@@ -420,6 +434,10 @@ class BleTransport implements GroupTransport {
     );
     _clientControl[peerId] = control;
 
+    // Start buffering before subscribing: the host answers the CCCD write
+    // immediately, and anything it sends now would otherwise reach
+    // ClientSession before it knows its own peerId.
+    _earlyControl[peerId] = [];
     await _central.setCharacteristicNotifyState(
       peripheral,
       control,
@@ -427,6 +445,17 @@ class BleTransport implements GroupTransport {
     );
 
     _emit(PeerConnectedEvent(peerId));
+
+    // Flush on the event loop rather than a microtask, so the caller's
+    // `_peerId = await connect(...)` has already run.
+    Future<void>.delayed(Duration.zero, () {
+      final pending = _earlyControl.remove(peerId);
+      if (pending == null) return;
+      for (final bytes in pending) {
+        _emit(ControlMessageEvent(peerId, bytes));
+      }
+    });
+
     return peerId;
   }
 
@@ -434,6 +463,7 @@ class BleTransport implements GroupTransport {
   Future<void> disconnect(String peerId) async {
     final peripheral = _connected.remove(peerId);
     _clientControl.remove(peerId);
+    _earlyControl.remove(peerId);
 
     // Host path: the peer is a central we are serving.
     final central = _centrals.remove(peerId);
@@ -514,6 +544,7 @@ class BleTransport implements GroupTransport {
     }
     _subs.clear();
     _discovered.clear();
+    _earlyControl.clear();
     _connected.clear();
     _clientControl.clear();
     _centrals.clear();
