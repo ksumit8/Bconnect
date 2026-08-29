@@ -105,3 +105,19 @@ Some devices refuse `adb shell pm grant` with
 `SecurityException: Neither user 2000 nor current process has
 GRANT_RUNTIME_PERMISSIONS` (observed on the IV2201). There, accept the
 Nearby-devices dialog in the UI instead.
+
+## Check 5 — permissions and Bluetooth off (Task 8)
+
+Uninstall and reinstall so permissions are fresh:
+
+    adb -s $A uninstall com.example.bconnect
+    adb -s $A install -r build/app/outputs/flutter-apk/app-debug.apk
+
+Launch WITHOUT granting anything via adb.
+
+PASS when the system permission dialog appears on first launch.
+
+Then turn Bluetooth OFF on phone A and launch the app.
+
+PASS when the home screen shows `This device can't host a group` and the
+Create card does not navigate when tapped.

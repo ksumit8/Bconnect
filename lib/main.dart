@@ -3,9 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
 import 'state/transport_provider.dart';
+import 'transport/ble/ble_permissions.dart';
 import 'transport/ble/ble_transport.dart';
 
-void main() => runApp(buildProductionApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Ask before the first screen renders, so Discover and Create are usable
+  // immediately rather than failing silently on first tap.
+  //
+  // This is not redundant with the plugin's own `authorize()`. Observed on the
+  // IV2201: `authorize()` raises the Nearby-devices dialog but only requests
+  // BLUETOOTH_CONNECT and BLUETOOTH_ADVERTISE, leaving BLUETOOTH_SCAN denied —
+  // and a denied SCAN makes discovery return nothing while reporting success.
+  // `BlePermissions.request()` asks for all three together.
+  await BlePermissions.request();
+
+  runApp(buildProductionApp());
+}
 
 /// The widget tree the shipping app runs.
 ///
