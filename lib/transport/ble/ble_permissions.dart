@@ -37,6 +37,17 @@ abstract final class BlePermissions {
     return BlePermissionResult.denied;
   }
 
+  /// Requested separately from [request] and deliberately not folded into its
+  /// result: a refused notification permission costs the user the "Group
+  /// active" notification, but hosting, scanning and joining all still work.
+  /// Letting it turn the whole permission result into `denied` would be wrong.
+  ///
+  /// Android 13+ only. On older versions `permission_handler` reports it
+  /// granted without prompting.
+  static Future<BlePermissionResult> requestNotifications() async {
+    return _map(await Permission.notification.request());
+  }
+
   static Future<BlePermissionResult> request() async {
     final statuses = await [
       Permission.bluetoothScan,

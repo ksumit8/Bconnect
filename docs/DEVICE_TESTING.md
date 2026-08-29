@@ -145,3 +145,23 @@ PASS when the join succeeds and phone A's roster returns to 2.
 **Battery.** Leave phone A hosting for 5 minutes with the screen on.
 
 PASS when the group is still discoverable from phone B afterwards.
+
+## Check 7 — the group survives backgrounding (Task 10)
+
+1. Phone A: create "Team Alpha".
+2. PASS when a notification appears: `Group active`.
+3. Press HOME on phone A, then lock the screen.
+4. Phone B: open Join Group.
+
+PASS when `Team Alpha` is STILL listed with phone A's screen off.
+
+5. Phone B joins while phone A stays locked.
+
+PASS when the join succeeds, and phone A shows 2 members when unlocked.
+
+6. Phone A: End Call.
+
+PASS when the `Group active` notification disappears.
+
+This is the check that the in-memory fake could never model: the Phase 0
+spike showed advertising stops when the app loses foreground.

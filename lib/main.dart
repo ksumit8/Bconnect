@@ -19,6 +19,11 @@ Future<void> main() async {
   // `BlePermissions.request()` asks for all three together.
   await BlePermissions.request();
 
+  // Separate, and its result deliberately ignored: this only governs whether
+  // the foreground service's "Group active" notification is visible. Hosting
+  // works either way.
+  await BlePermissions.requestNotifications();
+
   runApp(buildProductionApp());
 }
 

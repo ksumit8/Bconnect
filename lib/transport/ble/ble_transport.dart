@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
+import 'package:flutter/services.dart';
 
 import '../../domain/models/audio.dart';
 import '../group_transport.dart';
@@ -76,6 +76,8 @@ class BleTransport implements GroupTransport {
   // another screen never actually stops the radio.
   bool _scanning = false;
   Timer? _deferredStopScan;
+
+  static const _serviceChannel = MethodChannel('bconnect/group_service');
 
   final Map<String, Peripheral> _connected = {};
   final Map<String, GATTCharacteristic> _clientControl = {};
@@ -191,6 +193,27 @@ class BleTransport implements GroupTransport {
   }
 
   // --- Host role: Task 4 and 5 -------------------------------------------
+
+  /// Keeps the process alive while hosting. Android stops advertising when
+  /// the app leaves the foreground (observed during the Phase 0 spike).
+  Future<void> startForegroundService() async {
+    try {
+      await _serviceChannel.invokeMethod<void>('start');
+    } catch (_) {
+      // Not fatal: the group still works while the app is in the foreground.
+      // Caught broadly rather than as PlatformException because under
+      // `flutter test` there is no handler at all and the channel throws
+      // MissingPluginException instead.
+    }
+  }
+
+  Future<void> stopForegroundService() async {
+    try {
+      await _serviceChannel.invokeMethod<void>('stop');
+    } catch (_) {
+      // Nothing to stop; see above for why this is not PlatformException.
+    }
+  }
 
   /// Publishes the GATT service and wires the host-side listeners.
   ///
@@ -360,6 +383,8 @@ class BleTransport implements GroupTransport {
         isFull: isFull,
       ),
     );
+
+    await startForegroundService();
   }
 
   @override
@@ -388,6 +413,7 @@ class BleTransport implements GroupTransport {
 
   @override
   Future<void> stopAdvertising() async {
+    await stopForegroundService();
     _advertisedName = null;
     _advertisedGroupId = null;
     _centrals.clear();
