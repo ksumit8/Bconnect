@@ -165,3 +165,19 @@ PASS when the `Group active` notification disappears.
 
 This is the check that the in-memory fake could never model: the Phase 0
 spike showed advertising stops when the app loses foreground.
+
+## Check 8 — Gate 3, several clients on one host (needs 3+ phones)
+
+Phone A hosts. Phones B and C both join.
+
+PASS when:
+- phone A's roster shows 3 members
+- B and C both show 3 members
+- neither B nor C is dropped within 2 minutes
+
+With more phones, repeat up to `ProtocolLimits.maxMembers` (8).
+
+If the host drops clients beyond some count N, that N minus one is the real
+maximum. Spec section 9.1 says the fallback is graduated: set
+`ProtocolLimits.maxMembers` to the measured value and update spec section 5.5.
+Do NOT lower it without a measurement.
