@@ -453,12 +453,17 @@ class BleTransport implements GroupTransport {
     });
 
     if (_scanning) return;
-    _scanning = true;
 
     // Unfiltered: filtering by service UUID hides the difference between
     // "nothing on air" and "advertising without our UUID", which makes field
     // diagnosis much harder. decode() does the filtering instead.
+    //
+    // The flag is set only once the start has actually succeeded. Setting it
+    // first would mean a throw here left it stuck true, and every later
+    // startScan() would short-circuit into a no-op — the app would never scan
+    // again for the life of the process.
     await _central.startDiscovery();
+    _scanning = true;
   }
 
   @override
@@ -636,7 +641,10 @@ class BleTransport implements GroupTransport {
     _subs.clear();
 
     // Stop the radio doing work after teardown: a live advertisement or scan
-    // outlives the app's UI and drains battery.
+    // outlives the app's UI and drains battery. The foreground service goes
+    // too — its notification claims a group is open, and after teardown that
+    // is no longer true.
+    await stopForegroundService();
     try {
       await _peripheral.stopAdvertising();
     } catch (_) {}
